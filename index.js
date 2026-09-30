@@ -8,6 +8,13 @@ const ffmpegPath = require('ffmpeg-static');
 const fs = require('fs');
 const path = require('path');
 
+// 🌟 Render無料プラン対策：形だけのダミーWebサーバーを起動してRenderのエラー(HTTP Ports)を完全回避する
+// Renderは環境変数 PORT (デフォルトで10000など) を自動で割り振るため、それを開いて合格させます
+const http = require('http');
+http.createServer((req, res) => { res.writeHead(200); res.end('OK'); }).listen(process.env.PORT || 3000, () => {
+    console.log(`🌍 RenderのWebチェックに合格しました。ダミーWebポートを開放中...`);
+});
+
 const TOKENS = {
     botMain: process.env.DISCORD_TOKEN_MAIN,
     subs: [
@@ -21,14 +28,14 @@ const TOKENS = {
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
-class GuildAudioMixer extends Readable {
+// 外部サーバー軽量特化型ミキサー
+class GuildAudioMixer extends Transform {
     constructor(guildId) {
         super();
         this.guildId = guildId;
         this.buffers = new Map();
         this.volumes = new Map();
         this.frameSize = 3840;
-        this.timer = setInterval(() => this.generateFrame(), 20);
     }
     setVolume(sourceIndex, value) { this.volumes.set(String(sourceIndex), value); }
     getVolume(sourceIndex) {
@@ -40,15 +47,20 @@ class GuildAudioMixer extends Readable {
         const idx = String(sourceIndex);
         if (!this.buffers.has(idx)) this.buffers.set(idx, Buffer.alloc(0));
         let buf = Buffer.concat([this.buffers.get(idx), chunk]);
-        if (buf.length > this.frameSize * 2) buf = buf.subarray(buf.length - this.frameSize);
+        if (buf.length > this.frameSize * 2) {
+            buf = buf.subarray(buf.length - this.frameSize);
+        }
         this.buffers.set(idx, buf);
+        this.mixAndFlush();
     }
-    generateFrame() {
-        let hasData = false;
-        for (const [_, buf] of this.buffers) { if (buf.length > 0) { hasData = true; break; } }
-        if (!hasData) { this.push(Buffer.alloc(this.frameSize)); return; }
-        const mixed = Buffer.alloc(this.frameSize);
-        for (let i = 0; i < this.frameSize; i += 2) {
+    mixAndFlush() {
+        let minLength = Infinity;
+        if (this.buffers.size === 0) return;
+        for (const [_, buf] of this.buffers) { if (buf.length < minLength) minLength = buf.length; }
+        if (minLength < 2 || minLength === Infinity) return;
+        const processLength = minLength - (minLength % 2);
+        const mixed = Buffer.alloc(processLength);
+        for (let i = 0; i < processLength; i += 2) {
             let mixedSample = 0;
             for (const [idx, buf] of this.buffers) {
                 let sample = i < buf.length ? buf.readInt16LE(i) : 0;
@@ -60,10 +72,10 @@ class GuildAudioMixer extends Readable {
             mixed.writeInt16LE(mixedSample, i);
         }
         this.push(mixed);
-        for (const [idx, buf] of this.buffers) { this.buffers.set(idx, buf.subarray(this.frameSize)); }
+        for (const [idx, buf] of this.buffers) { this.buffers.set(idx, buf.subarray(processLength)); }
     }
-    destroy() { clearInterval(this.timer); this.buffers.clear(); this.volumes.clear(); }
-    _read() {}
+    _transform(chunk, encoding, callback) { this.push(chunk); callback(); }
+    destroy() { this.buffers.clear(); this.volumes.clear(); }
 }
 
 const guildMixers = new Map();
@@ -71,7 +83,6 @@ const guildPlayers = new Map();
 const createClient = () => new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const clientMain = createClient();
 const subClients = [];
-
 function getOrCreateGuildResources(guildId) {
     if (!guildMixers.has(guildId)) guildMixers.set(guildId, new GuildAudioMixer(guildId));
     if (!guildPlayers.has(guildId)) {
@@ -119,6 +130,7 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
         opusStream.on('end', cleanup);
     });
 }
+
 async function findVoiceChannelForce(guild, target) {
     const channels = await guild.channels.fetch().catch(() => null);
     if (!channels) return null;
@@ -142,10 +154,10 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
     connMain.on(VoiceConnectionStatus.Ready, () => {
         console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通。`);
         const resource = createAudioResource(mixer, { inputType: StreamType.Raw, inlineVolume: true });
-        connMain.subscribe(player); player.play(resource);
+        connMain.subscribe(player); 
+        player.play(resource);
     });
 }
-
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     const currentGuildId = message.guildId;
