@@ -158,6 +158,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
 
     const { player, mixer } = getOrCreateGuildResources(guildId);
 
+    // 1. 聴く係（Sub）Botたちの接続
     sourceChannels.forEach((channel, index) => {
         const clientSub = subClients[index];
         if (!clientSub) return;
@@ -165,32 +166,41 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
     });
 
+    // 2. 大域（Main）Botの接続
     const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
     
     connMain.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（無音パディング制御開始）。`);
+        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（リアルタイム・ストリーム補正開始）。`);
         
-        // 🌟 20msごとにDiscordへ確実にデータを引き渡す無限ストリーム
-        const infiniteStream = new PassThrough({ highWaterMark: FRAME_SIZE * 4 });
+        // 🌟 解決の鍵: 詰まりやすいミキサー直読みをやめ、高精度なパイプライン（PassThrough）を通す
+        const infiniteStream = new PassThrough({ highWaterMark: FRAME_SIZE * 2 });
 
+        // ミキサーに音が届き次第、瞬時にバッファへ書き込み
+        const onData = (chunk) => {
+            if (infiniteStream.writable) infiniteStream.write(chunk);
+        };
+        mixer.on('data', onData);
+
+        // 💡 超重要: 誰も喋っていない瞬間でも、Discordが要求する20ms周期（無音パディング）を維持するタイマーを補正
         const intervalId = setInterval(() => {
-            let chunk = mixer.read(FRAME_SIZE);
-            
-            if (!chunk || chunk.length < FRAME_SIZE) {
+            // パススルー内のバッファが不足している（＝誰も喋っていない）場合
+            if (infiniteStream.readableLength < FRAME_SIZE) {
+                // 強制的に無音フレームを注入してDiscordプレイヤーが「停止（Idle）」するのを物理的に防ぐ
                 infiniteStream.write(SILENCE_FRAME);
-            } else {
-                infiniteStream.write(chunk);
             }
         }, 20);
 
+        // ボット切断（退室）時のクリーンアップ処理
         connMain.on(VoiceConnectionStatus.Destroyed, () => {
             clearInterval(intervalId);
+            mixer.off('data', onData);
             infiniteStream.destroy();
-            console.log(`🛑 [ギルド: ${guildId}] 大域ライン閉鎖。タイマーを解放しました。`);
+            console.log(`🛑 [ギルド: ${guildId}] 大域ライン閉鎖。リソースを解放しました。`);
         });
 
+        // 3. 補正済みの無限ストリームをDiscordプレイヤーにセット
         const resource = createAudioResource(infiniteStream, { 
-            inputType: StreamType.Raw, 
+            inputType: StreamType.Raw, // 生PCMフォーマット（16bit 48kHz Stereo）を指定
             inlineVolume: false,
             silencePaddingChannels: 0 
         });
@@ -198,7 +208,8 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         connMain.subscribe(player); 
         player.play(resource);
     });
-};
+}
+
 
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
