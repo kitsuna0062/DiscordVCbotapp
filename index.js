@@ -198,7 +198,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         connMain.subscribe(player); 
         player.play(resource);
     });
-}
+};
 
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
