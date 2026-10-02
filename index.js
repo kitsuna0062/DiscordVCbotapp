@@ -273,11 +273,13 @@ clientMain.on('messageCreate', async (message) => {
             }
             if (guildPlayers.has(currentGuildId)) guildPlayers.delete(currentGuildId);
             
+            // 🌟 修正：古いミキサーを破棄し、管理マップからも完全に削除してメモリを解放
             if (guildMixers.has(currentGuildId)) {
-                guildMixers.get(currentGuildId).destroy();
+                try { guildMixers.get(currentGuildId).destroy(); } catch(e){}
                 guildMixers.delete(currentGuildId);
             }
             if (guildActiveInputs.has(currentGuildId)) guildActiveInputs.delete(currentGuildId);
+            if (guildVolumes.has(currentGuildId)) guildVolumes.delete(currentGuildId); // ついでに音量マップもクリア
 
             message.reply(disconnected ? '👋 ボットがこのサーバーのVCから退出しました。' : '❓ 参加していません。');
         } catch (e) { console.error(e); message.reply('❌ 退出エラー'); }
@@ -305,6 +307,11 @@ clientMain.on('messageCreate', async (message) => {
         if (!channelMain || sourceChannels.length === 0) return message.reply('❌ ボイスチャンネルが見つかりません。');
 
         try {
+            // 🌟 追記：新しい接続を始める前に、古いサーバー用ミキサーのゴミを完全に消去
+            if (guildMixers.has(currentGuildId)) {
+                try { guildMixers.get(currentGuildId).destroy(); } catch(e){}
+                guildMixers.delete(currentGuildId);
+            }
             connectToVCs(currentGuildId, channelMain, sourceChannels);
             let configData = {};
             if (fs.existsSync(CONFIG_FILE)) { try { configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch(e){} }
