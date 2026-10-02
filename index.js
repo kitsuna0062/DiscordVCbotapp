@@ -156,7 +156,6 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
 
     const { player, mixer } = getOrCreateGuildResources(guildId);
 
-    // 1. 聴く係（Sub）Botたちの接続
     sourceChannels.forEach((channel, index) => {
         const clientSub = subClients[index];
         if (!clientSub) return;
@@ -164,59 +163,81 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
     });
 
-    // 2. 大域（Main）Botの接続
     const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
     
     connMain.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（最新優先キュー型バッファ駆動）。`);
+        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（ダブルバッファ・ローテーション駆動）。`);
         
-        // 🌟 解決の鍵：中継ストリームを生成し、上限を最大「15フレーム分（約0.3秒）」に制限
-        const infiniteStream = new PassThrough({ highWaterMark: FRAME_SIZE * 4 });
-        const MAX_QUEUE_BYTES = FRAME_SIZE * 15;
+        // 🌟 解決の鍵：2つの独立した PassThrough キャッシュを用意
+        let buffer1 = new PassThrough({ highWaterMark: FRAME_SIZE * 30 });
+        let buffer2 = new PassThrough({ highWaterMark: FRAME_SIZE * 30 });
+        
+        // 現在どちらのバッファに書き込んでいるかを管理するフラグ
+        let activeBuffer = 1;
 
-        // 20ms周期で無音を常時パディングしつつ、ミキサー側のゴミ詰まりも並行してパージするタイマー
+        // Discordプレイヤーには専用の出力ストリームを1本接続
+        const outputStream = new PassThrough({ highWaterMark: FRAME_SIZE * 4 });
+
+        // 🌟 3分の2（20フレーム＝約0.4秒分）を閾値（しきい値）に設定
+        const SWITCH_THRESHOLD = FRAME_SIZE * 20;
+
         const intervalId = setInterval(() => {
-            if (infiniteStream.readableLength < FRAME_SIZE) {
-                infiniteStream.push(SILENCE_FRAME);
+            // Discordプレイヤーへの無音供給タイミング（20ms周期を維持）
+            if (outputStream.readableLength < FRAME_SIZE) {
+                outputStream.push(SILENCE_FRAME);
             }
-            
-            // 💡 ミキサーの内部バッファが0.3秒分を超えたら、溢れた古い無音・音声を一括で吸い出して破棄
-            if (mixer.readableLength > FRAME_SIZE * 15) {
-                const mixerOverflow = mixer.readableLength - (FRAME_SIZE * 15);
-                mixer.read(mixerOverflow);
+
+            // 💡 交互にデータを吸い出してメインの出力ストリームに統合
+            let currentInBuf = (activeBuffer === 1) ? buffer1 : buffer2;
+            if (currentInBuf.readableLength >= FRAME_SIZE) {
+                const chunk = currentInBuf.read(FRAME_SIZE);
+                if (chunk) outputStream.write(chunk);
+            }
+
+            // 💡 ミキサーの内部に溜まる不要な初期無音も20msごとに強制パージして目詰まりを防止
+            if (mixer.readableLength > FRAME_SIZE * 5) {
+                mixer.read(mixer.readableLength);
             }
         }, 20);
 
         // ミキサーからデータが出力された瞬間の処理
         const onData = (chunk) => {
-            if (!infiniteStream.writable) return;
+            if (activeBuffer === 1) {
+                // バッファ1に書き込み
+                buffer1.write(chunk);
 
-            // 現在ストリーム内部に溜まっているデータ量を取得
-            const currentBuffered = infiniteStream.readableLength;
+                // 🌟 バッファ1が3分の2溜まったら、シームレスにバッファ2へ移行！
+                if (buffer1.readableLength >= SWITCH_THRESHOLD) {
+                    activeBuffer = 2;
+                    // 古くなったバッファ1の残データを安全にクリアして完全に空にする
+                    buffer1.destroy();
+                    buffer1 = new PassThrough({ highWaterMark: FRAME_SIZE * 30 });
+                }
+            } else {
+                // バッファ2に書き込み
+                buffer2.write(chunk);
 
-            // 💡 キュー（FIFO）構造：新しく書き込むデータによって上限を超える場合
-            if (currentBuffered + chunk.length > MAX_QUEUE_BYTES) {
-                const overflowBytes = (currentBuffered + chunk.length) - MAX_QUEUE_BYTES;
-                
-                // 🌟 キューの先頭（最も古いデータ）からはみ出たバイト数分を正確に吸い出して「削除」
-                infiniteStream.read(overflowBytes);
+                // 🌟 バッファ2が3分の2溜まったら、シームレスにバッファ1へ移行！
+                if (buffer2.readableLength >= SWITCH_THRESHOLD) {
+                    activeBuffer = 1;
+                    // 古くなったバッファ2の残データを安全にクリアして完全に空にする
+                    buffer2.destroy();
+                    buffer2 = new PassThrough({ highWaterMark: FRAME_SIZE * 30 });
+                }
             }
-
-            // 古いデータが押し出されて空いたスペースに、最新のデータ（chunk）を書き込む
-            infiniteStream.write(chunk);
         };
         mixer.on('data', onData);
 
-        // ボット切断（退室）時のクリーンアップ
         connMain.on(VoiceConnectionStatus.Destroyed, () => {
             clearInterval(intervalId);
             mixer.off('data', onData);
-            infiniteStream.destroy();
-            console.log(`🛑 [ギルド: ${guildId}] 大域ライン閉鎖。リソースを完全に解放しました。`);
+            buffer1.destroy();
+            buffer2.destroy();
+            outputStream.destroy();
+            console.log(`🛑 [ギルド: ${guildId}] 大域ライン閉鎖。`);
         });
 
-        // 3. 補正済みのストリームをDiscordプレイヤーにセット
-        const resource = createAudioResource(infiniteStream, { 
+        const resource = createAudioResource(outputStream, { 
             inputType: StreamType.Raw, 
             inlineVolume: false,
             silencePaddingChannels: 0 
@@ -226,6 +247,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         player.play(resource);
     });
 }
+
 
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
