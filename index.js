@@ -181,14 +181,22 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         };
         mixer.on('data', onData);
 
-        // 💡 超重要: 誰も喋っていない瞬間でも、Discordが要求する20ms周期（無音パディング）を維持するタイマーを補正
+                // 💡 超重要: 誰も喋っていない瞬間でも、Discordが要求する20ms周期（無音パディング）を維持するタイマーを補正
         const intervalId = setInterval(() => {
             // パススルー内のバッファが不足している（＝誰も喋っていない）場合
             if (infiniteStream.readableLength < FRAME_SIZE) {
                 // 強制的に無音フレームを注入してDiscordプレイヤーが「停止（Idle）」するのを物理的に防ぐ
                 infiniteStream.write(SILENCE_FRAME);
             }
+
+            // 🌟 解決のための追記：【超安全・最小限の中継ラインキャッシュパージ】
+            // 誰も喋っていない時間に、Discordの消費速度を超えてお盆の上に無音データが溜まり始めたら（2フレーム分以上）
+            if (infiniteStream.readableLength > FRAME_SIZE * 2) {
+                // 押し出されるように、一番古い過去の無音データを1フレーム分だけ吸い出してその場で破棄（消去）します！
+                infiniteStream.read(FRAME_SIZE);
+            }
         }, 20);
+
 
         // ボット切断（退室）時のクリーンアップ処理
         connMain.on(VoiceConnectionStatus.Destroyed, () => {
