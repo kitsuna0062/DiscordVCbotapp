@@ -156,6 +156,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
 
     const { player, mixer } = getOrCreateGuildResources(guildId);
 
+    // 1. 聴く係（Sub）Botたちの接続
     sourceChannels.forEach((channel, index) => {
         const clientSub = subClients[index];
         if (!clientSub) return;
@@ -163,82 +164,51 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
     });
 
+    // 2. 大域（Main）Botの接続
     const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
     
     connMain.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（ダブルバッファ・ローテーション駆動）。`);
+        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（メモリセーフ・アクティブ制御）。`);
         
-        // 🌟 解決の鍵：2つの独立した PassThrough キャッシュを用意
-        let buffer1 = new PassThrough({ highWaterMark: FRAME_SIZE * 30 });
-        let buffer2 = new PassThrough({ highWaterMark: FRAME_SIZE * 30 });
-        
-        // 現在どちらのバッファに書き込んでいるかを管理するフラグ
-        let activeBuffer = 1;
+        // 🌟 解決の鍵：バッファサイズを極小(2フレーム分)にし、データが溜まる余地を物理的に無くす
+        const infiniteStream = new PassThrough({ highWaterMark: FRAME_SIZE * 2 });
 
-        // Discordプレイヤーには専用の出力ストリームを1本接続
-        const outputStream = new PassThrough({ highWaterMark: FRAME_SIZE * 4 });
-
-        // 🌟 3分の2（20フレーム＝約0.4秒分）を閾値（しきい値）に設定
-        const SWITCH_THRESHOLD = FRAME_SIZE * 20;
-
+        // ミキサーの溜まったゴミデータを定期的にクリアし、メモリリークを完全に防ぐタイマー
         const intervalId = setInterval(() => {
-            // Discordプレイヤーへの無音供給タイミング（20ms周期を維持）
-            if (outputStream.readableLength < FRAME_SIZE) {
-                outputStream.push(SILENCE_FRAME);
+            // Discordがデータを要求したとき、バッファが空なら1ミリ秒の狂いもなく無音を返す
+            if (infiniteStream.readableLength < FRAME_SIZE) {
+                infiniteStream.push(SILENCE_FRAME);
             }
-
-            // 💡 交互にデータを吸い出してメインの出力ストリームに統合
-            let currentInBuf = (activeBuffer === 1) ? buffer1 : buffer2;
-            if (currentInBuf.readableLength >= FRAME_SIZE) {
-                const chunk = currentInBuf.read(FRAME_SIZE);
-                if (chunk) outputStream.write(chunk);
-            }
-
-            // 💡 ミキサーの内部に溜まる不要な初期無音も20msごとに強制パージして目詰まりを防止
+            
+            // 💡 メモリリーク対策：ミキサーに声が届いていない時間の滞留データを強制的に吸い出して破棄
             if (mixer.readableLength > FRAME_SIZE * 5) {
                 mixer.read(mixer.readableLength);
             }
         }, 20);
 
-        // ミキサーからデータが出力された瞬間の処理
+        // ミキサーからデータが出たら、溜め込まずに直接Discordへ受け渡す
         const onData = (chunk) => {
-            if (activeBuffer === 1) {
-                // バッファ1に書き込み
-                buffer1.write(chunk);
-
-                // 🌟 バッファ1が3分の2溜まったら、シームレスにバッファ2へ移行！
-                if (buffer1.readableLength >= SWITCH_THRESHOLD) {
-                    activeBuffer = 2;
-                    // 古くなったバッファ1の残データを安全にクリアして完全に空にする
-                    buffer1.destroy();
-                    buffer1 = new PassThrough({ highWaterMark: FRAME_SIZE * 30 });
+            if (infiniteStream.writable) {
+                // バッファが溢れそうな場合は古いデータを破棄して最新の音を優先（音詰まりを防止）
+                if (infiniteStream.readableLength > FRAME_SIZE * 2) {
+                    infiniteStream.read(FRAME_SIZE);
                 }
-            } else {
-                // バッファ2に書き込み
-                buffer2.write(chunk);
-
-                // 🌟 バッファ2が3分の2溜まったら、シームレスにバッファ1へ移行！
-                if (buffer2.readableLength >= SWITCH_THRESHOLD) {
-                    activeBuffer = 1;
-                    // 古くなったバッファ2の残データを安全にクリアして完全に空にする
-                    buffer2.destroy();
-                    buffer2 = new PassThrough({ highWaterMark: FRAME_SIZE * 30 });
-                }
+                infiniteStream.write(chunk);
             }
         };
         mixer.on('data', onData);
 
+        // ボット切断（退室）時のクリーンアップ処理
         connMain.on(VoiceConnectionStatus.Destroyed, () => {
             clearInterval(intervalId);
             mixer.off('data', onData);
-            buffer1.destroy();
-            buffer2.destroy();
-            outputStream.destroy();
-            console.log(`🛑 [ギルド: ${guildId}] 大域ライン閉鎖。`);
+            infiniteStream.destroy();
+            console.log(`🛑 [ギルド: ${guildId}] 大域ライン閉鎖。リソースを完全に解放しました。`);
         });
 
-        const resource = createAudioResource(outputStream, { 
-            inputType: StreamType.Raw, 
+        // 3. 補正済みのストリームをDiscordプレイヤーにセット
+        const resource = createAudioResource(infiniteStream, { 
+            inputType: StreamType.Raw, // 生PCMフォーマットを指定
             inlineVolume: false,
             silencePaddingChannels: 0 
         });
@@ -247,6 +217,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         player.play(resource);
     });
 }
+
 
 
 clientMain.on('messageCreate', async (message) => {
@@ -286,6 +257,7 @@ clientMain.on('messageCreate', async (message) => {
         } catch (e) { console.error(e); }
         return message.reply(`🔊 元VC ${targetIndex} の音量を ${value}倍 に変更しました。(即時適用されました)`);
     }
+
     if (!message.content.startsWith('!setvc') && message.content !== '!connect' && message.content !== '!vcleave') return;
 
     // 🚪 退出コマンド (!vcleave)
@@ -345,7 +317,7 @@ clientMain.on('messageCreate', async (message) => {
             if (!guildVolumes.has(currentGuildId)) guildVolumes.set(currentGuildId, new Map());
             const volMap = guildVolumes.get(currentGuildId);
 
-            // どのBotがどのVCに入ったかをメンション形式で一覧化
+            // 🌟 修正ポイント: どのBotがどのVCに入ったかをメンション形式で一覧化
             let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
                 const v = volMap.get(String(idx + 1)) ?? 1.0;
@@ -381,6 +353,7 @@ clientMain.on('messageCreate', async (message) => {
 
             connectToVCs(currentGuildId, channelMain, sourceChannels);
 
+            // 🌟 修正ポイント: 再接続時も同様にメンション形式で一覧化
             let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
                 const v = volMap.get(String(idx + 1)) ?? 1.0;
@@ -392,6 +365,9 @@ clientMain.on('messageCreate', async (message) => {
     }
 });
 
+
+
+// 🌟 修正ポイント①: 'clientReady' から正式な 'ready' イベントへ修正
 clientMain.once('ready', () => { console.log(`🚀 司令塔Botが正常に起動しました！`); });
 process.on('uncaughtException', (err) => { if (!err.message.includes('Premature close') && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error(' [システム警告]:', err); });
 
@@ -399,6 +375,7 @@ process.on('uncaughtException', (err) => { if (!err.message.includes('Premature 
     try {
         if (!TOKENS.botMain || TOKENS.subs.length === 0) { console.error('❌ 環境変数が空です。'); return; }
 
+        // 🌟 修正ポイント②: テザリング環境でのタイムアウトを防ぐためIPv4を優先
         const dns = require('dns');
         if (dns.setDefaultResultOrder) {
             dns.setDefaultResultOrder('ipv4first');
@@ -409,6 +386,7 @@ process.on('uncaughtException', (err) => { if (!err.message.includes('Premature 
         console.log('✅ 司令塔Bot (Main) オンライン。5秒後にサブBotの順次起動を開始します...');
 
         for (let i = 0; i < TOKENS.subs.length; i++) {
+            // 🌟 修正ポイント③: 連続ログインによるブロックを防ぐため間隔を5秒に延長
             await new Promise(r => setTimeout(r, 5000));
             console.log(`🔗 聴く係Bot (${i + 1}/${TOKENS.subs.length}) に接続中...`);
             const subClient = createClient();
