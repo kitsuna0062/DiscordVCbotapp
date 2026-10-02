@@ -123,6 +123,8 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
         const { opusStream, decoder, passThrough, mixerInput, compositeKey } = streamData;
         const { mixer } = getOrCreateGuildResources(guildId);
 
+        try { mixerInput.write(SILENCE_BUFFER); } catch(e){}
+
         setTimeout(() => {
             try { 
                 passThrough.destroy();
@@ -168,47 +170,37 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
     const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
     
     connMain.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（メモリセーフ・アクティブ制御）。`);
+        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（リアルタイム・ストリーム補正開始）。`);
         
-        // 🌟 解決の鍵：バッファサイズを極小(2フレーム分)にし、データが溜まる余地を物理的に無くす
+        // 🌟 解決の鍵: 詰まりやすいミキサー直読みをやめ、高精度なパイプライン（PassThrough）を通す
         const infiniteStream = new PassThrough({ highWaterMark: FRAME_SIZE * 2 });
 
-        // ミキサーの溜まったゴミデータを定期的にクリアし、メモリリークを完全に防ぐタイマー
-        const intervalId = setInterval(() => {
-            // Discordがデータを要求したとき、バッファが空なら1ミリ秒の狂いもなく無音を返す
-            if (infiniteStream.readableLength < FRAME_SIZE) {
-                infiniteStream.push(SILENCE_FRAME);
-            }
-            
-            // 💡 メモリリーク対策：ミキサーに声が届いていない時間の滞留データを強制的に吸い出して破棄
-            if (mixer.readableLength > FRAME_SIZE * 5) {
-                mixer.read(mixer.readableLength);
-            }
-        }, 20);
-
-        // ミキサーからデータが出たら、溜め込まずに直接Discordへ受け渡す
+        // ミキサーに音が届き次第、瞬時にバッファへ書き込み
         const onData = (chunk) => {
-            if (infiniteStream.writable) {
-                // バッファが溢れそうな場合は古いデータを破棄して最新の音を優先（音詰まりを防止）
-                if (infiniteStream.readableLength > FRAME_SIZE * 2) {
-                    infiniteStream.read(FRAME_SIZE);
-                }
-                infiniteStream.write(chunk);
-            }
+            if (infiniteStream.writable) infiniteStream.write(chunk);
         };
         mixer.on('data', onData);
+
+        // 💡 超重要: 誰も喋っていない瞬間でも、Discordが要求する20ms周期（無音パディング）を維持するタイマーを補正
+        const intervalId = setInterval(() => {
+            // パススルー内のバッファが不足している（＝誰も喋っていない）場合
+            if (infiniteStream.readableLength < FRAME_SIZE) {
+                // 強制的に無音フレームを注入してDiscordプレイヤーが「停止（Idle）」するのを物理的に防ぐ
+                infiniteStream.write(SILENCE_FRAME);
+            }
+        }, 20);
 
         // ボット切断（退室）時のクリーンアップ処理
         connMain.on(VoiceConnectionStatus.Destroyed, () => {
             clearInterval(intervalId);
             mixer.off('data', onData);
             infiniteStream.destroy();
-            console.log(`🛑 [ギルド: ${guildId}] 大域ライン閉鎖。リソースを完全に解放しました。`);
+            console.log(`🛑 [ギルド: ${guildId}] 大域ライン閉鎖。リソースを解放しました。`);
         });
 
-        // 3. 補正済みのストリームをDiscordプレイヤーにセット
+        // 3. 補正済みの無限ストリームをDiscordプレイヤーにセット
         const resource = createAudioResource(infiniteStream, { 
-            inputType: StreamType.Raw, // 生PCMフォーマットを指定
+            inputType: StreamType.Raw, // 生PCMフォーマット（16bit 48kHz Stereo）を指定
             inlineVolume: false,
             silencePaddingChannels: 0 
         });
@@ -217,7 +209,6 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         player.play(resource);
     });
 }
-
 
 
 clientMain.on('messageCreate', async (message) => {
