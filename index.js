@@ -169,10 +169,12 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
     // 2. 大域（Main）Botの接続
     const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
     
-    connMain.on(VoiceConnectionStatus.Ready, () => {
+        connMain.on(VoiceConnectionStatus.Ready, () => {
         console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（リアルタイム・ストリーム補正開始）。`);
         
-        // 🌟 解決の鍵: 詰まりやすいミキサー直読みをやめ、高精度なパイプライン（PassThrough）を通す
+        // 🌟 修正点①: ミキサーの処理周期を100msから「20ms」に変更し、Discordの要求タイミングと完璧に一致させます！
+        mixer.getOptions().clearInterval = 20;
+
         const infiniteStream = new PassThrough({ highWaterMark: FRAME_SIZE * 2 });
 
         // ミキサーに音が届き次第、瞬時にバッファへ書き込み
@@ -181,12 +183,19 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         };
         mixer.on('data', onData);
 
-        // 💡 超重要: 誰も喋っていない瞬間でも、Discordが要求する20ms周期（無音パディング）を維持するタイマーを補正
+        // 超重要: 誰も喋っていない瞬間でも、Discordが要求する20ms周期を維持するタイマー
         const intervalId = setInterval(() => {
-            // パススルー内のバッファが不足している（＝誰も喋っていない）場合
+            // 🌟 修正点②: 【最重要メモリセーフ処理】
+            // Discordがデータを消費（read）した結果、ストリーム内のバッファが不足している（＝誰も喋っていない）場合
             if (infiniteStream.readableLength < FRAME_SIZE) {
-                // 強制的に無音フレームを注入してDiscordプレイヤーが「停止（Idle）」するのを物理的に防ぐ
+                // 強制的に無音フレームを注入してDiscordプレイヤーの接続維持
                 infiniteStream.write(SILENCE_FRAME);
+            }
+
+            // 💡 誰も喋っていない時間にミキサー内部に溜まってしまった不要なゴミデータを
+            // この20msタイマーのタイミングで強制的に吸い出してその場で破棄（パージ）します
+            if (mixer.readableLength > FRAME_SIZE) {
+                mixer.read(mixer.readableLength);
             }
         }, 20);
 
@@ -200,7 +209,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
 
         // 3. 補正済みの無限ストリームをDiscordプレイヤーにセット
         const resource = createAudioResource(infiniteStream, { 
-            inputType: StreamType.Raw, // 生PCMフォーマット（16bit 48kHz Stereo）を指定
+            inputType: StreamType.Raw, 
             inlineVolume: false,
             silencePaddingChannels: 0 
         });
@@ -208,6 +217,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         connMain.subscribe(player); 
         player.play(resource);
     });
+
 }
 
 
