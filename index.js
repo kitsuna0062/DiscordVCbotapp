@@ -38,7 +38,7 @@ const guildActiveStreams = new Map();  // 各ギルドの稼働中ストリー�
 function getOrCreateGuildResources(guildId, sourceIndex) {
     const idxStr = String(sourceIndex);
 
-    // 1. ギルド用のベースMapがなければ作成
+    // 1. 各種ベースMapの存在を徹底担保
     if (!guildPlayers.has(guildId)) guildPlayers.set(guildId, new Map());
     if (!guildMixers.has(guildId)) guildMixers.set(guildId, new Map());
     if (!guildVolumes.has(guildId)) guildVolumes.set(guildId, new Map());
@@ -47,15 +47,9 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
     const playersMap = guildPlayers.get(guildId);
     const mixersMap = guildMixers.get(guildId);
 
-    // 2. このBot専用のプレイヤーとマスターミキサーがなければ常時起動モードで作成
-    if (!playersMap.has(idxStr)) {
-        const player = createAudioPlayer();
-        player.on('error', (err) => { 
-            if (!err.message.includes('Premature close') && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error(err); 
-        });
-        playersMap.set(idxStr, player);
-
-        // 🌟 バックプレッシャー（詰まり）を内部で定期クリアする設定のマスターミキサー
+    // 2. 指定された sourceIndex のミキサーやプレイヤーが存在しない場合は「絶対に」その場で作る
+    if (!playersMap.has(idxStr) || !mixersMap.has(idxStr)) {
+        // マスターミキサーを最優先で実体化
         const mixer = new Mixer({
             channels: 2,
             bitDepth: 16,
@@ -64,7 +58,13 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
         });
         mixersMap.set(idxStr, mixer);
 
-        // ミキサーの生の音声出力を、途切れることなくプレイヤーに流し続ける
+        const player = createAudioPlayer();
+        player.on('error', (err) => { 
+            if (!err.message.includes('Premature close') && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error(err); 
+        });
+        playersMap.set(idxStr, player);
+
+        // ミキサーの生の音声をプレイヤーに常時結合
         const mixerResource = createAudioResource(mixer, {
             inputType: StreamType.Raw,
             inlineVolume: false
@@ -72,11 +72,13 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
         player.play(mixerResource);
     }
 
+    // 3. 確実に存在するオブジェクトを返す
     return { 
         player: playersMap.get(idxStr),
         mixer: mixersMap.get(idxStr)
     };
 }
+
 
 const createClient = () => new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const clientMain = createClient();
@@ -177,25 +179,28 @@ async function findVoiceChannelForce(guild, target) {
  * 🌟 接続処理（マルチプレイヤー同時吸い上げ方式）
  */
 function connectToVCs(guildId, mainChannel, sourceChannels) {
-    // 古い接続を完全にクリーンアップ
+    // 1. 古い接続を完全にクリーンアップ
     try { getVoiceConnection(guildId, 'botMain')?.destroy(); } catch(e){}
     sourceChannels.forEach((_, index) => { try { getVoiceConnection(guildId, `botSub_${index}`)?.destroy(); } catch(e){} });
 
-    // 大域（Main）Botの接続
+    // 2. 🌟 最重要：サブBotがVCに入るより「前」に、全Bot分のミキサーとプレイヤーを確実に先行生成する
+    sourceChannels.forEach((_, index) => {
+        getOrCreateGuildResources(guildId, index + 1);
+    });
+
+    // 3. 大域（Main）Botの接続
     const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
     
     connMain.on(VoiceConnectionStatus.Ready, () => {
         console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（マルチプレイヤーミキシングパイプ駆動）。`);
-        
-        // 🌟 修正ポイント：各サブBot（チャンネル）ごとに独立して作ったプレイヤーを、すべてメインBotの通話に同時にアタッチ！
-        // Discord.js内部で綺麗にすべての部屋の音が合流（ミックス）して再生されます。
+        // 先行生成しておいたプレイヤーをメインBotに購読させる
         sourceChannels.forEach((_, index) => {
             const { player } = getOrCreateGuildResources(guildId, index + 1);
             connMain.subscribe(player); 
         });
     });
 
-    // 聴く係（Sub）Botたちの接続とダイレクト受信開始
+    // 4. 準備が100%整った後に、満を持して聴く係（Sub）BotたちをVCに接続させる
     sourceChannels.forEach((channel, index) => {
         const clientSub = subClients[index];
         if (!clientSub) return;
@@ -203,6 +208,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
     });
 }
+
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     const currentGuildId = message.guildId;
