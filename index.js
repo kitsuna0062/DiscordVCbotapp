@@ -63,15 +63,19 @@ const guildReverseStreams = new Map();
 /**
  * 🌟 バッファプレッシャー完全回避・高音質ダイレクト音声受信セットアップ（%対応版）
  */
+/**
+ * 🌟 バッファプレッシャー完全回避・高音質ダイレクト音声受信セットアップ（%対応版）
+ */
 function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
     const receiver = connection.receiver;
-    const { player } = getOrCreateGuildResources(guildId, sourceIndex);
+    const { player } = getOrCreateGuildResources(guildId, sourceIndex); // このBot専用のプレイヤーを取得
     const activeStreams = guildActiveStreams.get(guildId);
 
     connection.on(VoiceConnectionStatus.Ready, () => { 
         console.log(`📡 [ギルド: ${guildId} / Bot: ${sourceName}] 受信準備完了。`); 
     });
 
+    // 🌟 誰かが喋り始めたときの処理
     receiver.speaking.on('start', (userId) => {
         const compositeKey = `${sourceIndex}_${userId}`;
         if (activeStreams.has(compositeKey)) return; 
@@ -88,13 +92,16 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
         decoder.on('error', () => {});
         passThrough.on('error', () => {});
 
+        // 音声のデコードラインを結ぶ
         opusStream.pipe(decoder).pipe(passThrough);
 
+        // Discord.jsのプレイヤーにダイレクトに音声資源として合流させる
         const resource = createAudioResource(passThrough, { 
             inputType: StreamType.Raw,
             inlineVolume: true 
         });
 
+        // ％の数値を倍率（100% = 1.0）に変換して適用
         const volMap = guildVolumes.get(guildId);
         const currentVolPercent = volMap?.get(String(sourceIndex)) ?? 100;
         resource.volume.setVolume(currentVolPercent / 100);
@@ -104,6 +111,7 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
         activeStreams.set(compositeKey, { opusStream, decoder, passThrough, resource });
     });
 
+    // 🌟 話し終えた瞬間の処理
     receiver.speaking.on('end', (userId) => {
         const compositeKey = `${sourceIndex}_${userId}`;
         const streamData = activeStreams.get(compositeKey);
@@ -133,7 +141,6 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
     if (!guildReverseStreams.has(guildId)) guildReverseStreams.set(guildId, new Map());
     const reverseMap = guildReverseStreams.get(guildId);
     
-    // 既に同じサブBotへの逆中継が動いている場合は重複防止のため一度切る
     if (reverseMap.has(targetSubIndex)) {
         stopReverseVoiceReceiver(guildId, targetSubIndex);
     }
@@ -143,9 +150,8 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
 
     console.log(`📡 [ギルド: ${guildId}] 大域Bot -> サブBot ${targetSubIndex} への逆方向音声中継を準備中...`);
 
-    // メインBotの通話内で「!vconを実行したユーザー」が喋り始めたら起動
     const startHandler = (userId) => {
-        if (userId !== speakerUserId) return; // コマンドを実行した本人以外の声は無視
+        if (userId !== speakerUserId) return; 
         
         const streamKey = `reverse_${targetSubIndex}`;
         if (reverseMap.has(streamKey)) return;
@@ -185,9 +191,93 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
     receiver.speaking.on('start', startHandler);
     receiver.speaking.on('end', endHandler);
 
-    // コマンド終了時（!vcoff）にイベントリスナーごと消せるようにハンドラーを保存
     reverseMap.set(targetSubIndex, { startHandler, endHandler, speakerUserId });
 }
+
+/**
+ * 🌟 逆方向中継を完全に停止・解体する関数
+ */
+function stopReverseVoiceReceiver(guildId, targetSubIndex) {
+    const reverseMap = guildReverseStreams.get(guildId);
+    if (!reverseMap) return;
+
+    const config = reverseMap.get(targetSubIndex);
+    const connMain = getVoiceConnection(guildId, 'botMain');
+    if (config && connMain) {
+        connMain.receiver.speaking.off('start', config.startHandler);
+        connMain.receiver.speaking.off('end', config.endHandler);
+    }
+    reverseMap.delete(targetSubIndex);
+
+    const streamKey = `reverse_${targetSubIndex}`;
+    const streamData = reverseMap.get(streamKey);
+    if (streamData) {
+        try {
+            streamData.decoder.unpipe(streamData.passThrough);
+            streamData.opusStream.unpipe(streamData.decoder);
+            streamData.passThrough.destroy();
+            streamData.decoder.destroy();
+            streamData.opusStream.destroy();
+        } catch(e){}
+        reverseMap.delete(streamKey);
+    }
+    console.log(`🔕 [ギルド: ${guildId}] サブBot ${targetSubIndex} への逆方向中継を完全オフにしました。`);
+}
+
+async function findVoiceChannelForce(guild, target) {
+    const channels = await guild.channels.fetch().catch(() => null);
+    if (!channels) return null;
+    return channels.find(c => c && (c.id === target || c.name === target) && (c.type === ChannelType.GuildVoice || c.isVoiceBased()));
+}
+
+/**
+ * 🌟 接続処理（メインBotのスピーカーオフ解除版）
+ */
+function connectToVCs(guildId, mainChannel, sourceChannels) {
+    try { getVoiceConnection(guildId, 'botMain')?.destroy(); } catch(e){}
+    sourceChannels.forEach((_, index) => { try { getVoiceConnection(guildId, `botSub_${index}`)?.destroy(); } catch(e){} });
+
+    sourceChannels.forEach((_, index) => {
+        getOrCreateGuildResources(guildId, index + 1);
+    });
+
+    // 🌟 修正ポイント：selfMute: false, selfDeaf: false を追加してスピーカーとマイクを強制解放します
+    const connMain = joinVoiceChannel({ 
+        channelId: mainChannel.id, 
+        guildId, 
+        adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, 
+        selfMute: false, 
+        selfDeaf: false, 
+        group: 'botMain' 
+    });
+    
+    connMain.on(VoiceConnectionStatus.Ready, () => {
+        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（マルチプレイヤー同時購読パイプ駆動）。`);
+        sourceChannels.forEach((_, index) => {
+            const { player } = getOrCreateGuildResources(guildId, index + 1);
+            connMain.subscribe(player); 
+        });
+    });
+
+    sourceChannels.forEach(async (channel, index) => {
+        const clientSub = subClients[index];
+        if (!clientSub) return;
+        
+        const targetGuild = await clientSub.guilds.fetch(guildId).catch(() => null);
+        if (!targetGuild) return;
+
+        const connSub = joinVoiceChannel({ 
+            channelId: channel.id, 
+            guildId, 
+            adapterCreator: targetGuild.voiceAdapterCreator, 
+            selfMute: false, 
+            selfDeaf: false, 
+            group: `botSub_${index}` 
+        });
+        setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
+    });
+}
+
 
 /**
  * 🌟 新設：逆方向中継を完全に停止・解体する関数
