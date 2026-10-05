@@ -5,7 +5,7 @@ const prism = require('prism-media');
 const fs = require('fs');
 const path = require('path');
 const { PassThrough } = require('stream'); 
-const Mixer = require('audio-mixer'); // 🌟 解決策：波括弧 { } を外し、クラス本体をダイレクトに読み込みます
+const AudioMixerModule = require('audio-mixer'); // 🌟 解決策：一度モジュールをそのまま丸ごと読み込みます
 
 // 🌟 Render無料プラン対策
 const http = require('http');
@@ -29,10 +29,10 @@ const CONFIG_FILE = path.join(__dirname, 'config.json');
 const guildPlayers = new Map();       // 各ギルドの各Botプレイヤーを管理する二次元Map
 const guildMixers = new Map();        // 各ギルドの各Botマスターミキサーを管理する二次元Map
 const guildVolumes = new Map();       // 各ギルドの音量設定
-const guildActiveStreams = new Map();  // 各ギルドの稼稼中ストリームを管理
+const guildActiveStreams = new Map();  // 各ギルドの稼働中ストリームを管理
 
 /**
- * 🌟 バッファプレッシャー対策版 リソース管理関数（%対応版）
+ * 🌟 バッファプレッシャー対策版 リソース管理関数（%対応・エラー完全回避版）
  */
 function getOrCreateGuildResources(guildId, sourceIndex) {
     const idxStr = String(sourceIndex);
@@ -48,8 +48,20 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
 
     // 指定された sourceIndex のミキサーやプレイヤーが存在しない場合はその場で作る
     if (!playersMap.has(idxStr) || !mixersMap.has(idxStr)) {
-        // 🌟 正しく読み込まれたクラスを使ってマスターミキサーを実体化
-        const mixer = new Mixer({
+        
+        // 🌟 解決の鍵：ライブラリの書き出し形式が「モジュール直」か「プロパティ内」かを自動判別します
+        let MixerConstructor;
+        if (typeof AudioMixerModule === 'function') {
+            MixerConstructor = AudioMixerModule;
+        } else if (AudioMixerModule && typeof AudioMixerModule.Mixer === 'function') {
+            MixerConstructor = AudioMixerModule.Mixer;
+        } else {
+            // 万が一のフォールバック
+            MixerConstructor = AudioMixerModule;
+        }
+
+        // 判別した確実なクラス（コンストラクター）を使ってマスターミキサーを実体化
+        const mixer = new MixerConstructor({
             channels: 2,
             bitDepth: 16,
             sampleRate: 48000,
@@ -80,6 +92,7 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
 const createClient = () => new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const clientMain = createClient();
 const subClients = [];
+
 /**
  * 🌟 バッファプレッシャー・フリーズ完全対策版 音声受信セットアップ（%対応完全版）
  */
