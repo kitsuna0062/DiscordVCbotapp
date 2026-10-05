@@ -175,36 +175,63 @@ async function findVoiceChannelForce(guild, target) {
 /**
  * 🌟 接続処理（マルチプレイヤー同時吸い上げ方式）
  */
+/**
+ * 📡 【修正版・第二部】 接続処理（フェッチ安全強化＆マルチプレイヤー同時吸い上げ方式）
+ */
 function connectToVCs(guildId, mainChannel, sourceChannels) {
     // 1. 古い接続を完全にクリーンアップ
     try { getVoiceConnection(guildId, 'botMain')?.destroy(); } catch(e){}
     sourceChannels.forEach((_, index) => { try { getVoiceConnection(guildId, `botSub_${index}`)?.destroy(); } catch(e){} });
 
-    // 2. 🌟 最重要：サブBotがVCに入るより「前」に、全Bot分のミキサーとプレイヤーを確実に先行生成する
+    // 2. サブBotがVCに入るより「前」に、全Bot分のミキサーとプレイヤーを確実に先行生成
     sourceChannels.forEach((_, index) => {
         getOrCreateGuildResources(guildId, index + 1);
     });
 
     // 3. 大域（Main）Botの接続
-    const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
+    const connMain = joinVoiceChannel({ 
+        channelId: mainChannel.id, 
+        guildId, 
+        adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, 
+        group: 'botMain' 
+    });
     
     connMain.on(VoiceConnectionStatus.Ready, () => {
         console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（マルチプレイヤーミキシングパイプ駆動）。`);
-        // 先行生成しておいたプレイヤーをメインBotに購読させる
         sourceChannels.forEach((_, index) => {
             const { player } = getOrCreateGuildResources(guildId, index + 1);
             connMain.subscribe(player); 
         });
     });
 
-    // 4. 準備が100%整った後に、満を持して聴く係（Sub）BotたちをVCに接続させる
-    sourceChannels.forEach((channel, index) => {
+    // 4. 聴く係（Sub）BotたちをVCに接続（🌟安全対策を強化）
+    sourceChannels.forEach(async (channel, index) => {
         const clientSub = subClients[index];
         if (!clientSub) return;
-        const connSub = joinVoiceChannel({ channelId: channel.id, guildId, adapterCreator: clientSub.guilds.cache.get(guildId).voiceAdapterCreator, selfMute: false, selfDeaf: false, group: `botSub_${index}` });
-        setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
+
+        try {
+            // 🌟 キャッシュがない可能性を考慮し、サーバー情報をAPIから強制取得
+            const targetGuild = await clientSub.guilds.fetch(guildId).catch(() => null);
+            if (!targetGuild) {
+                console.error(`❌ サブBot ${index + 1} は、ギルドID: ${guildId} のサーバーに参加していないか、見つかりません。`);
+                return;
+            }
+
+            const connSub = joinVoiceChannel({ 
+                channelId: channel.id, 
+                guildId, 
+                adapterCreator: targetGuild.voiceAdapterCreator, // 🌟 フェッチした確実なデータから生成
+                selfMute: false, 
+                selfDeaf: false, 
+                group: `botSub_${index}` 
+            });
+            setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
+        } catch (err) {
+            console.error(`❌ サブBot ${index + 1} のVC接続開始時にエラー:`, err);
+        }
     });
 }
+
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     const currentGuildId = message.guildId;
