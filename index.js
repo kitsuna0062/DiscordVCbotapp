@@ -353,7 +353,6 @@ clientMain.on('messageCreate', async (message) => {
         } catch (e) { console.error(e); }
         return message.reply(`🔊 元VC ${targetIndex} の音量を ${value}% に変更しました。(中継ストリームへ即時適用されました)`);
     }
-    if (!message.content.startsWith('!setvc') && message.content !== '!connect' && message.content !== '!vcleave') return;
 
     // 🚪 退出コマンド (!vcleave)
     if (message.content === '!vcleave') {
@@ -473,6 +472,7 @@ clientMain.on('messageCreate', async (message) => {
         } catch (error) { console.error(error); return message.reply('❌ 再接続エラー'); }
     }
 });
+
 
 clientMain.once('ready', () => { console.log(`🚀 司令塔Botが正常に起動しました！`); });
 process.on('uncaughtException', (err) => { if (!err.message.includes('Premature close') && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error(' [システム警告]:', err); });
