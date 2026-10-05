@@ -389,7 +389,7 @@ clientMain.on('messageCreate', async (message) => {
                 activeStreams.clear();
             }
 
-            return message.reply(disconnected ? '👋 ボットがすべてのVCから退出しました。残存キャッシュとバッファを完全に消去しました。' : '❓ 参加していません。');
+            return message.reply(disconnected ? '👋 ボットがすべてのVCから退出しました。' : '❓ 参加していません。');
         } catch (e) { console.error(e); return message.reply('❌ 退出エラー'); }
     }
 
