@@ -28,10 +28,11 @@ const CONFIG_FILE = path.join(__dirname, 'config.json');
 const guildPlayers = new Map();       // 各ギルドの各Botプレイヤーを個別に管理する二次元Map
 const guildVolumes = new Map();       // 各ギルドの音量設定（100ベースの%値）
 const guildActiveStreams = new Map();  // 各ギルドの稼働中ストリームを管理
+const guildReverseStreams = new Map(); // 🌟 逆方向（メイン -> サブ）の中継ストリームを管理するマップ
 
 /**
  * 🌟 バッファプレッシャーを回避するマルチプレイヤー生成関数
- * 外部ミキサーに頼らず、サブBot（Index）ごとに独立した再生プレイヤーを用意します。
+ * 外部ミキサーに頼らず、サブBot（Index）およびメインBot(Index: 0)ごとに独立した再生プレイヤーを用意します。
  */
 function getOrCreateGuildResources(guildId, sourceIndex) {
     const idxStr = String(sourceIndex);
@@ -57,15 +58,11 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
 const createClient = () => new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const clientMain = createClient();
 const subClients = [];
-// 🌟 逆方向（メイン -> サブ）の中継ストリームを管理するマップ
-const guildReverseStreams = new Map(); 
-
 /**
- * 🌟 バッファプレッシャー完全回避・高音質ダイレクト音声受信セットアップ（%対応版）
+ * 🌟 サブBotからメインBotのプレイヤーへ音声を中継するセットアップ
  */
-function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
+function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex, mainPlayer) {
     const receiver = connection.receiver;
-    const { player } = getOrCreateGuildResources(guildId, sourceIndex); // このBot専用のプレイヤーを取得
     const activeStreams = guildActiveStreams.get(guildId);
 
     connection.on(VoiceConnectionStatus.Ready, () => { 
@@ -103,8 +100,8 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
         const currentVolPercent = volMap?.get(String(sourceIndex)) ?? 100;
         resource.volume.setVolume(currentVolPercent / 100);
 
-        // このBot専用のプレイヤーで再生（これでサブBotの部屋で音が鳴ります）
-        player.play(resource);
+        // 💡 引数で受け取った「メインボット専用のプレイヤー」で再生させる
+        mainPlayer.play(resource);
 
         activeStreams.set(compositeKey, { opusStream, decoder, passThrough, resource });
     });
@@ -133,7 +130,7 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
 }
 
 /**
- * 🌟 逆方向中継：メインBotの声を「サブBotのプレイヤー」へ直接流し込むように修正
+ * 🌟 逆方向中継：メインBotの声を「サブBotのプレイヤー」へ直接流し込む
  */
 function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUserId) {
     if (!guildReverseStreams.has(guildId)) guildReverseStreams.set(guildId, new Map());
@@ -144,7 +141,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
     }
 
     const receiver = connMain.receiver;
-    // 🌟 修正：サブBot自身に紐づいている独立プレイヤーを取得します
+    // 🌟 サブBot自身に紐づいている独立プレイヤーを取得します
     const { player: subPlayer } = getOrCreateGuildResources(guildId, targetSubIndex);
 
     console.log(`📡 [ギルド: ${guildId}] 大域Bot -> サブBot ${targetSubIndex} への逆方向音声中継を準備中...`);
@@ -224,7 +221,6 @@ function stopReverseVoiceReceiver(guildId, targetSubIndex) {
     }
     console.log(`🔕 [ギルド: ${guildId}] サブBot ${targetSubIndex} への逆方向中継を完全オフにしました。`);
 }
-
 async function findVoiceChannelForce(guild, target) {
     const channels = await guild.channels.fetch().catch(() => null);
     if (!channels) return null;
@@ -232,17 +228,19 @@ async function findVoiceChannelForce(guild, target) {
 }
 
 /**
- * 🌟 接続処理（メインBot・サブBotそれぞれが独立した音声を出力できるように修正）
+ * 🌟 接続処理（メインBot・サブBotそれぞれが独立した音声を出力できるように分離修正）
  */
 function connectToVCs(guildId, mainChannel, sourceChannels) {
     try { getVoiceConnection(guildId, 'botMain')?.destroy(); } catch(e){}
     sourceChannels.forEach((_, index) => { try { getVoiceConnection(guildId, `botSub_${index}`)?.destroy(); } catch(e){} });
 
+    // 各プレイヤーのリソースを初期化 (0番をメインボット用とする)
+    getOrCreateGuildResources(guildId, 0);
     sourceChannels.forEach((_, index) => {
         getOrCreateGuildResources(guildId, index + 1);
     });
 
-    // 1. メインボットの接続
+    // 1. メインボットの通話接続
     const connMain = joinVoiceChannel({ 
         channelId: mainChannel.id, 
         guildId, 
@@ -252,16 +250,16 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         group: 'botMain' 
     });
     
-    // 💡 メインボット自身用の独立したプレイヤーを1つ作成して割り当てる
+    // 💡 メインボット専用の独立したプレイヤー（Index: 0）を割り当てる
     // (サブボットから中継されてきた音声は、すべてこのメインボット用プレイヤーに集約して再生します)
-    const { player: mainPlayer } = getOrCreateGuildResources(guildId, 0); // インデックス0をメイン用とする
+    const { player: mainPlayer } = getOrCreateGuildResources(guildId, 0);
     connMain.subscribe(mainPlayer);
 
     connMain.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通。`);
+        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（独立プレイヤー駆動）。`);
     });
 
-    // 2. サブボットの接続
+    // 2. サブボットの通話接続
     sourceChannels.forEach(async (channel, index) => {
         const clientSub = subClients[index];
         if (!clientSub) return;
@@ -278,104 +276,27 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
             group: `botSub_${index}` 
         });
         
-        // サブボット自身の接続に、そのサブボット専用のプレイヤーを直結
+        // サブボット自身の接続に、そのBot専用のプレイヤー(index + 1)を直結
         const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
         connSub.subscribe(subPlayer);
 
-        // サブボットが拾った声を、メインボットのプレイヤー(mainPlayer)に流すようにレシーバーを設定
+        // サブボットが受信した声をメインボットのプレイヤー(mainPlayer)へ流すようにセットアップ
         setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, mainPlayer);
     });
 }
 
-
-
-
-/**
- * 🌟 新設：逆方向中継を完全に停止・解体する関数
- */
-function stopReverseVoiceReceiver(guildId, targetSubIndex) {
-    const reverseMap = guildReverseStreams.get(guildId);
-    if (!reverseMap) return;
-
-    // ① イベントの監視を解除
-    const config = reverseMap.get(targetSubIndex);
-    const connMain = getVoiceConnection(guildId, 'botMain');
-    if (config && connMain) {
-        connMain.receiver.speaking.off('start', config.startHandler);
-        connMain.receiver.speaking.off('end', config.endHandler);
-    }
-    reverseMap.delete(targetSubIndex);
-
-    // ② 現在流れているストリームがあれば強制破壊
-    const streamKey = `reverse_${targetSubIndex}`;
-    const streamData = reverseMap.get(streamKey);
-    if (streamData) {
-        try {
-            streamData.decoder.unpipe(streamData.passThrough);
-            streamData.opusStream.unpipe(streamData.decoder);
-            streamData.passThrough.destroy();
-            streamData.decoder.destroy();
-            streamData.opusStream.destroy();
-        } catch(e){}
-        reverseMap.delete(streamKey);
-    }
-    console.log(`🔕 [ギルド: ${guildId}] サブBot ${targetSubIndex} への逆方向中継を完全オフにしました。`);
-}
-
-async function findVoiceChannelForce(guild, target) {
-    const channels = await guild.channels.fetch().catch(() => null);
-    if (!channels) return null;
-    return channels.find(c => c && (c.id === target || c.name === target) && (c.type === ChannelType.GuildVoice || c.isVoiceBased()));
-}
-
-function connectToVCs(guildId, mainChannel, sourceChannels) {
-    try { getVoiceConnection(guildId, 'botMain')?.destroy(); } catch(e){}
-    sourceChannels.forEach((_, index) => { try { getVoiceConnection(guildId, `botSub_${index}`)?.destroy(); } catch(e){} });
-
-    sourceChannels.forEach((_, index) => {
-        getOrCreateGuildResources(guildId, index + 1);
-    });
-
-    const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
-    
-    connMain.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（マルチプレイヤー同時購読パイプ駆動）。`);
-        sourceChannels.forEach((_, index) => {
-            const { player } = getOrCreateGuildResources(guildId, index + 1);
-            connMain.subscribe(player); 
-        });
-    });
-
-    sourceChannels.forEach(async (channel, index) => {
-        const clientSub = subClients[index];
-        if (!clientSub) return;
-        
-        const targetGuild = await clientSub.guilds.fetch(guildId).catch(() => null);
-        if (!targetGuild) return;
-
-        const connSub = joinVoiceChannel({ 
-            channelId: channel.id, 
-            guildId, 
-            adapterCreator: targetGuild.voiceAdapterCreator, 
-            selfMute: false, 
-            selfDeaf: false, 
-            group: `botSub_${index}` 
-        });
-        setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
-    });
-}
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     const currentGuildId = message.guildId;
     const guild = clientMain.guilds.cache.get(currentGuildId);
     if (!guild) return;
 
-    // 🌟 修正ポイント：引数の配列から[1]番目（Bot番号）を確実に抽出します
+    // 🎙️ 逆方向拡声オンコマンド (!vcon)
     if (message.content.startsWith('!vcon')) {
         const args = message.content.split(' ');
         if (args.length < 2) return message.reply('❌ 使用法: !vcon [対象のサブBot番号(1, 2, ...)]');
         
-        const targetIndex = args[1].trim(); // 🌟 [1]を追加して確実に数値をパース
+        const targetIndex = args[1].trim(); 
         const targetIdxNum = parseInt(targetIndex, 10);
         
         if (isNaN(targetIdxNum) || targetIdxNum < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
@@ -383,17 +304,16 @@ clientMain.on('messageCreate', async (message) => {
         const connMain = getVoiceConnection(currentGuildId, 'botMain');
         if (!connMain) return message.reply('❌ メインBotがまだVCに参加していません。');
 
-        // 逆方向中継のセットアップを実行（指定されたサブBot番号へあなたの声をバインド）
         setupReverseVoiceReceiver(connMain, currentGuildId, targetIdxNum, message.author.id);
         return message.reply(`🎙️ メインBot ➔ 聴く係Bot ${targetIdxNum} への逆方向拡声がオンになりました。メインBotの部屋で喋ると、指定した部屋に声が流れます。`);
     }
 
-    // 🌟 修正ポイント：同様に[1]番目（Bot番号）を抽出してオフにします
+    // 🔕 逆方向拡声オフコマンド (!vcoff)
     if (message.content.startsWith('!vcoff')) {
         const args = message.content.split(' ');
         if (args.length < 2) return message.reply('❌ 使用法: !vcoff [対象のサブBot番号(1, 2, ...)]');
         
-        const targetIndex = args[1].trim(); // 🌟 [1]を追加
+        const targetIndex = args[1].trim(); 
         const targetIdxNum = parseInt(targetIndex, 10);
         
         if (isNaN(targetIdxNum) || targetIdxNum < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
@@ -433,7 +353,6 @@ clientMain.on('messageCreate', async (message) => {
         } catch (e) { console.error(e); }
         return message.reply(`🔊 元VC ${targetIndex} の音量を ${value}% に変更しました。(中継ストリームへ即時適用されました)`);
     }
-
     if (!message.content.startsWith('!setvc') && message.content !== '!connect' && message.content !== '!vcleave') return;
 
     // 🚪 退出コマンド (!vcleave)
@@ -511,7 +430,6 @@ clientMain.on('messageCreate', async (message) => {
 
             let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
-                // 初期状態のデフォルト値を 100(%) としてそのまま表示
                 const v = volMap.get(String(idx + 1)) ?? 100;
                 vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
             });
