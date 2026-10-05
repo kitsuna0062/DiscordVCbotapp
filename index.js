@@ -5,6 +5,7 @@ const prism = require('prism-media');
 const fs = require('fs');
 const path = require('path');
 const { PassThrough } = require('stream'); 
+const { Mixer } = require('audio-mixer'); // 🌟 オーディオミキサーライブラリを追加
 
 // 🌟 Render無料プラン対策
 const http = require('http');
@@ -25,34 +26,67 @@ const TOKENS = {
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
-const guildPlayers = new Map();
-const guildVolumes = new Map();
-const guildActiveStreams = new Map(); // 各ギルドの稼働中ストリームを管理
+const guildPlayers = new Map();       // 各ギルドの各Botプレイヤーを管理する二次元Map
+const guildMixers = new Map();        // 各ギルドの各Botマスターミキサーを管理する二次元Map
+const guildVolumes = new Map();       // 各ギルドの音量設定
+const guildActiveStreams = new Map();  // 各ギルドの稼働中ストリームを管理
 
-function getOrCreateGuildResources(guildId) {
-    if (!guildPlayers.has(guildId)) {
+/**
+ * 🌟 バッファプレッシャー対策版 リソース管理関数
+ * 1つの共有プレイヤーではなく、ソースIndex（Bot）ごとに「独立したミキサーとプレイヤー」を生成します。
+ */
+function getOrCreateGuildResources(guildId, sourceIndex) {
+    const idxStr = String(sourceIndex);
+
+    // 1. ギルド用のベースMapがなければ作成
+    if (!guildPlayers.has(guildId)) guildPlayers.set(guildId, new Map());
+    if (!guildMixers.has(guildId)) guildMixers.set(guildId, new Map());
+    if (!guildVolumes.has(guildId)) guildVolumes.set(guildId, new Map());
+    if (!guildActiveStreams.has(guildId)) guildActiveStreams.set(guildId, new Map());
+
+    const playersMap = guildPlayers.get(guildId);
+    const mixersMap = guildMixers.get(guildId);
+
+    // 2. このBot専用のプレイヤーとマスターミキサーがなければ常時起動モードで作成
+    if (!playersMap.has(idxStr)) {
         const player = createAudioPlayer();
         player.on('error', (err) => { 
             if (!err.message.includes('Premature close') && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error(err); 
         });
-        guildPlayers.set(guildId, player);
+        playersMap.set(idxStr, player);
+
+        // 🌟 バックプレッシャー（詰まり）を内部で定期クリアする設定のマスターミキサー
+        const mixer = new Mixer({
+            channels: 2,
+            bitDepth: 16,
+            sampleRate: 48000,
+            clearInterval: 250 
+        });
+        mixersMap.set(idxStr, mixer);
+
+        // ミキサーの生の音声出力を、途切れることなくプレイヤーに流し続ける
+        const mixerResource = createAudioResource(mixer, {
+            inputType: StreamType.Raw,
+            inlineVolume: false
+        });
+        player.play(mixerResource);
     }
-    if (!guildVolumes.has(guildId)) {
-        guildVolumes.set(guildId, new Map());
-    }
-    if (!guildActiveStreams.has(guildId)) {
-        guildActiveStreams.set(guildId, new Map());
-    }
-    return { player: guildPlayers.get(guildId) };
+
+    return { 
+        player: playersMap.get(idxStr),
+        mixer: mixersMap.get(idxStr)
+    };
 }
 
 const createClient = () => new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const clientMain = createClient();
 const subClients = [];
-
+/**
+ * 🌟 バッファプレッシャー・フリーズ完全対策版 音声受信セットアップ
+ */
 function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
     const receiver = connection.receiver;
-    const { player } = getOrCreateGuildResources(guildId);
+    const { mixer } = getOrCreateGuildResources(guildId, sourceIndex); // このBot専用の常時起動ミキサーを取得
     const activeStreams = guildActiveStreams.get(guildId);
 
     connection.on(VoiceConnectionStatus.Ready, () => { 
@@ -64,7 +98,7 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
         const compositeKey = `${sourceIndex}_${userId}`;
         if (activeStreams.has(compositeKey)) return; 
         
-        console.log(`🎵 [ギルド: ${guildId} / Bot: ${sourceName}] 音声検知・中継開始: ID ${userId}`);
+        console.log(`🎵 [ギルド: ${guildId} / Bot: ${sourceName}] 音声検知・ミキサー合流: ID ${userId}`);
         
         const opusStream = receiver.subscribe(userId, { 
             end: { behavior: EndBehaviorType.Manual } 
@@ -76,77 +110,99 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
         decoder.on('error', () => {});
         passThrough.on('error', () => {});
 
-        // 音声のデコードラインを結ぶ
+        // 音声のデコードラインを結合
         opusStream.pipe(decoder).pipe(passThrough);
 
-        // 🌟 解決の鍵：ミキサーを仲介せず、Discord.jsのプレイヤーにダイレクトに音声資源として合流させる！
-        const resource = createAudioResource(passThrough, { 
-            inputType: StreamType.Raw,
-            inlineVolume: true // ボリューム調整（!vol）を有効化
+        // 🌟 対策：ミキサー内部に、このユーザーのこの発言のためだけの「一時的な入力口」を動的作成
+        const mixerInput = mixer.makeNewInput({
+            channels: 2,
+            bitDepth: 16,
+            sampleRate: 48000,
+            volume: 100 // デフォルト100%
         });
 
-        // 音量設定を取得して適用
+        // 保存されている音量設定を適用
         const volMap = guildVolumes.get(guildId);
         const currentVol = volMap?.get(String(sourceIndex)) ?? 1.0;
-        resource.volume.setVolume(currentVol);
+        mixerInput.setVolume(currentVol * 100); // 1.0倍なら100%
 
-        // プレイヤーで再生（複数人が同時に喋っても、Discord.jsが内部で勝手に声をミックスしてくれます）
-        player.play(resource);
+        // デコードされたストリームを入力口へパイプ結合
+        passThrough.pipe(mixerInput);
 
-        // 管理マップに保存
-        activeStreams.set(compositeKey, { opusStream, decoder, passThrough, resource });
+        // キャッシュパージの際に追えるよう、生成された全てのオブジェクトをマップに記憶
+        activeStreams.set(compositeKey, { opusStream, decoder, passThrough, mixerInput });
     });
 
-    // 🌟 話し終えた瞬間の処理（完全自動・ノーキャッシュパージ）
+    // 🌟 話し終えた瞬間の処理（★ここでキャッシュとバッファを跡形もなく完全パージする）
     receiver.speaking.on('end', (userId) => {
         const compositeKey = `${sourceIndex}_${userId}`;
         const streamData = activeStreams.get(compositeKey);
         if (!streamData) return;
 
-        const { opusStream, decoder, passThrough } = streamData;
+        const { opusStream, decoder, passThrough, mixerInput } = streamData;
 
-        // 猶予を持たせて安全にリソースを完全解体
+        // 音声の語尾のプツプツ切れ（クリッピング）を防ぐために80msの極小バッファ猶予を持たせる
         setTimeout(() => {
             try { 
+                // ① ストリーム同士のパイプ結合を完全に引き抜く（unpipe）
+                passThrough.unpipe(mixerInput);
+                decoder.unpipe(passThrough);
+                opusStream.unpipe(decoder);
+
+                // ② 🌟 フリーズ対策：ミキサーの親ノードからこの入力口を削除し、完全に破壊する
+                mixer.removeInput(mixerInput);
+                mixerInput.destroy(); 
+
+                // ③ バックプレッシャーの原因となるNode.jsの内部メモリバッファを強制解放
                 passThrough.destroy();
                 decoder.destroy(); 
                 opusStream.destroy(); 
-            } catch(e){}
+            } catch(e){
+                console.error("🧹 [システム警告] ストリーム解体中にエラーが発生しました:", e);
+            }
+
             activeStreams.delete(compositeKey);
-            console.log(`🧹 [ギルド: ${guildId} / Bot: ${sourceName}] ストリーム完全解放。`);
+            console.log(`🧹 [ギルド: ${guildId} / Bot: ${sourceName}] ミキサーキャッシュ完全パージ完了。`);
         }, 80);
     });
 }
+
 async function findVoiceChannelForce(guild, target) {
     const channels = await guild.channels.fetch().catch(() => null);
     if (!channels) return null;
     return channels.find(c => c && (c.id === target || c.name === target) && (c.type === ChannelType.GuildVoice || c.isVoiceBased()));
 }
 
+/**
+ * 🌟 接続処理（マルチプレイヤー同時吸い上げ方式）
+ */
 function connectToVCs(guildId, mainChannel, sourceChannels) {
+    // 古い接続を完全にクリーンアップ
     try { getVoiceConnection(guildId, 'botMain')?.destroy(); } catch(e){}
     sourceChannels.forEach((_, index) => { try { getVoiceConnection(guildId, `botSub_${index}`)?.destroy(); } catch(e){} });
 
-    const { player } = getOrCreateGuildResources(guildId);
+    // 大域（Main）Botの接続
+    const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
+    
+    connMain.on(VoiceConnectionStatus.Ready, () => {
+        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（マルチプレイヤーミキシングパイプ駆動）。`);
+        
+        // 🌟 修正ポイント：各サブBot（チャンネル）ごとに独立して作ったプレイヤーを、すべてメインBotの通話に同時にアタッチ！
+        // Discord.js内部で綺麗にすべての部屋の音が合流（ミックス）して再生されます。
+        sourceChannels.forEach((_, index) => {
+            const { player } = getOrCreateGuildResources(guildId, index + 1);
+            connMain.subscribe(player); 
+        });
+    });
 
-    // 1. 聴く係（Sub）Botたちの接続とダイレクト受信開始
+    // 聴く係（Sub）Botたちの接続とダイレクト受信開始
     sourceChannels.forEach((channel, index) => {
         const clientSub = subClients[index];
         if (!clientSub) return;
         const connSub = joinVoiceChannel({ channelId: channel.id, guildId, adapterCreator: clientSub.guilds.cache.get(guildId).voiceAdapterCreator, selfMute: false, selfDeaf: false, group: `botSub_${index}` });
         setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
     });
-
-    // 2. 大域（Main）Botの接続
-    const connMain = joinVoiceChannel({ channelId: mainChannel.id, guildId, adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, group: 'botMain' });
-    
-    connMain.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（ダイレクトオーディオパイプ駆動）。`);
-        // 🌟 修正ポイント：プレイヤーをそのまま大域Botの接続（Connection）に直結します
-        connMain.subscribe(player); 
-    });
 }
-
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     const currentGuildId = message.guildId;
@@ -165,12 +221,13 @@ clientMain.on('messageCreate', async (message) => {
         if (!guildVolumes.has(currentGuildId)) guildVolumes.set(currentGuildId, new Map());
         guildVolumes.get(currentGuildId).set(String(targetIndex), value);
 
-        // 🌟 リアルタイム音量反映の書き換え
+        // 🌟 ミキサー入力へのリアルタイム音量反映
         const activeStreams = guildActiveStreams.get(currentGuildId);
         if (activeStreams) {
             for (const [key, streamData] of activeStreams.entries()) {
                 if (key.startsWith(`${targetIndex}_`)) {
-                    streamData.resource.volume.setVolume(value);
+                    // mixerInputの音量を更新 (1.0倍なら100)
+                    streamData.mixerInput.setVolume(value * 100);
                 }
             }
         }
@@ -183,7 +240,7 @@ clientMain.on('messageCreate', async (message) => {
             configData[currentGuildId].volumes[targetIndex] = value;
             fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
         } catch (e) { console.error(e); }
-        return message.reply(`🔊 元VC ${targetIndex} の音量を ${value}倍 に変更しました。(即時適用されました)`);
+        return message.reply(`🔊 元VC ${targetIndex} の音量を ${value}倍 に変更しました。(ミキサーへ即時適用されました)`);
     }
 
     if (!message.content.startsWith('!setvc') && message.content !== '!connect' && message.content !== '!vcleave') return;
@@ -198,13 +255,21 @@ clientMain.on('messageCreate', async (message) => {
                 const connSub = getVoiceConnection(currentGuildId, `botSub_${i}`);
                 if (connSub) { connSub.destroy(); disconnected = true; }
             }
+
+            // 🌟 プレイヤーとミキサーのマップキャッシュをクリーンアップ
             if (guildPlayers.has(currentGuildId)) guildPlayers.delete(currentGuildId);
+            if (guildMixers.has(currentGuildId)) guildMixers.delete(currentGuildId);
             
-            // 🌟 稼働中ストリームの完全一斉破棄
+            // 🌟 稼働中ストリームの完全一斉物理解体
             const activeStreams = guildActiveStreams.get(currentGuildId);
             if (activeStreams) {
                 for (const streamData of activeStreams.values()) {
                     try {
+                        streamData.passThrough.unpipe(streamData.mixerInput);
+                        streamData.decoder.unpipe(streamData.passThrough);
+                        streamData.opusStream.unpipe(streamData.decoder);
+                        
+                        streamData.mixerInput.destroy();
                         streamData.passThrough.destroy();
                         streamData.decoder.destroy();
                         streamData.opusStream.destroy();
@@ -213,7 +278,7 @@ clientMain.on('messageCreate', async (message) => {
                 activeStreams.clear();
             }
 
-            message.reply(disconnected ? '👋 ボットがこのサーバーのVCから退出しました。' : '❓ 参加していません。');
+            message.reply(disconnected ? '👋 ボットがすべてのVCから退出しました。残存キャッシュとバッファを完全に消去しました。' : '❓ 参加していません。');
         } catch (e) { console.error(e); message.reply('❌ 退出エラー'); }
         return;
     }
@@ -252,13 +317,13 @@ clientMain.on('messageCreate', async (message) => {
             if (!guildVolumes.has(currentGuildId)) guildVolumes.set(currentGuildId, new Map());
             const volMap = guildVolumes.get(currentGuildId);
 
-            let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
+            let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細 / ミキサー駆動】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
                 const v = volMap.get(String(idx + 1)) ?? 1.0;
                 vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}倍**)`;
             });
 
-            message.reply(`✅ 独立中継を開始しました！${vcDetailMsg}`);
+            message.reply(`✅ 各部屋の独立ミキサー中継を開始しました！${vcDetailMsg}`);
         } catch (error) { console.error(error); message.reply('❌ 接続エラーが発生しました。'); }
     }
 
@@ -287,13 +352,13 @@ clientMain.on('messageCreate', async (message) => {
 
             connectToVCs(currentGuildId, channelMain, sourceChannels);
 
-            let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
+            let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細 / ミキサー駆動】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
                 const v = volMap.get(String(idx + 1)) ?? 1.0;
                 vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}倍**)`;
             });
 
-            message.reply(`♻️ 前回の設定で中継を再開しました！${vcDetailMsg}`);
+            message.reply(`♻️ 前回の設定・音量をロードして中継を再開しました！${vcDetailMsg}`);
         } catch (error) { console.error(error); message.reply('❌ 再接続エラー'); }
     }
 });
@@ -325,6 +390,6 @@ process.on('uncaughtException', (err) => { if (!err.message.includes('Premature 
             await subClient.login(TOKENS.subs[i]);
             subClients.push(subClient);
         }
-        console.log(`🚀 すべてのBot（合計 ${subClients.length + 1} 台）が正常に起動しました！`);
+        console.log(`🚀 すべてのBot（合計 ${subClients.length + 1} 台）が正常に起動しました！ミキサーコア稼働準備完了。`);
     } catch (err) { console.error('❌ ログイン接続エラー:', err); }
 })();
