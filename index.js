@@ -232,7 +232,7 @@ async function findVoiceChannelForce(guild, target) {
 }
 
 /**
- * 🌟 接続処理（サブBotへのプレイヤー再割り当て＆メインBotの同時購読方式）
+ * 🌟 接続処理（メインBot・サブBotそれぞれが独立した音声を出力できるように修正）
  */
 function connectToVCs(guildId, mainChannel, sourceChannels) {
     try { getVoiceConnection(guildId, 'botMain')?.destroy(); } catch(e){}
@@ -242,6 +242,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         getOrCreateGuildResources(guildId, index + 1);
     });
 
+    // 1. メインボットの接続
     const connMain = joinVoiceChannel({ 
         channelId: mainChannel.id, 
         guildId, 
@@ -251,15 +252,16 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         group: 'botMain' 
     });
     
+    // 💡 メインボット自身用の独立したプレイヤーを1つ作成して割り当てる
+    // (サブボットから中継されてきた音声は、すべてこのメインボット用プレイヤーに集約して再生します)
+    const { player: mainPlayer } = getOrCreateGuildResources(guildId, 0); // インデックス0をメイン用とする
+    connMain.subscribe(mainPlayer);
+
     connMain.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（マルチプレイヤー同時購読パイプ駆動）。`);
-        // 🌟 プレイヤーをメインBotにも「同時に」購読させ、メインBotの部屋でも音が鳴るようにします
-        sourceChannels.forEach((_, index) => {
-            const { player } = getOrCreateGuildResources(guildId, index + 1);
-            connMain.subscribe(player); 
-        });
+        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通。`);
     });
 
+    // 2. サブボットの接続
     sourceChannels.forEach(async (channel, index) => {
         const clientSub = subClients[index];
         if (!clientSub) return;
@@ -276,14 +278,15 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
             group: `botSub_${index}` 
         });
         
-        // 🌟 最重要修正：サブBot自身の通話接続（connSub）に、そのBot専用のプレイヤーを直結（subscribe）します！
-        // これにより、サブBotは「受信」だけでなく、その部屋のスピーカーとして声を出す能力を手に入れます。
-        const { player } = getOrCreateGuildResources(guildId, index + 1);
-        connSub.subscribe(player);
+        // サブボット自身の接続に、そのサブボット専用のプレイヤーを直結
+        const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
+        connSub.subscribe(subPlayer);
 
-        setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
+        // サブボットが拾った声を、メインボットのプレイヤー(mainPlayer)に流すようにレシーバーを設定
+        setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, mainPlayer);
     });
 }
+
 
 
 
