@@ -63,9 +63,6 @@ const guildReverseStreams = new Map();
 /**
  * 🌟 バッファプレッシャー完全回避・高音質ダイレクト音声受信セットアップ（%対応版）
  */
-/**
- * 🌟 バッファプレッシャー完全回避・高音質ダイレクト音声受信セットアップ（%対応版）
- */
 function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
     const receiver = connection.receiver;
     const { player } = getOrCreateGuildResources(guildId, sourceIndex); // このBot専用のプレイヤーを取得
@@ -101,11 +98,12 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
             inlineVolume: true 
         });
 
-        // ％の数値を倍率（100% = 1.0）に変換して適用
+        // ％の数値を倍率に変換して適用
         const volMap = guildVolumes.get(guildId);
         const currentVolPercent = volMap?.get(String(sourceIndex)) ?? 100;
         resource.volume.setVolume(currentVolPercent / 100);
 
+        // このBot専用のプレイヤーで再生（これでサブBotの部屋で音が鳴ります）
         player.play(resource);
 
         activeStreams.set(compositeKey, { opusStream, decoder, passThrough, resource });
@@ -135,7 +133,7 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
 }
 
 /**
- * 🌟 新設：大域Bot（メイン）の声を特定のサブBotへ逆方向に中継するセットアップ
+ * 🌟 逆方向中継：メインBotの声を「サブBotのプレイヤー」へ直接流し込むように修正
  */
 function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUserId) {
     if (!guildReverseStreams.has(guildId)) guildReverseStreams.set(guildId, new Map());
@@ -146,6 +144,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
     }
 
     const receiver = connMain.receiver;
+    // 🌟 修正：サブBot自身に紐づいている独立プレイヤーを取得します
     const { player: subPlayer } = getOrCreateGuildResources(guildId, targetSubIndex);
 
     console.log(`📡 [ギルド: ${guildId}] 大域Bot -> サブBot ${targetSubIndex} への逆方向音声中継を準備中...`);
@@ -156,7 +155,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
         const streamKey = `reverse_${targetSubIndex}`;
         if (reverseMap.has(streamKey)) return;
 
-        console.log(`📢 [ギルド: ${guildId}] 大域Botの声を検知 ➔ サブBot ${targetSubIndex} へ拡声中...`);
+        console.log(`📢 [ギルド: ${guildId}] 大域Botの声を検知 ➔ サブBot ${targetSubIndex} のスピーカーへ流し込み中...`);
 
         const opusStream = receiver.subscribe(speakerUserId, { end: { behavior: EndBehaviorType.Manual } });
         const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
@@ -166,6 +165,8 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
         opusStream.pipe(decoder).pipe(passThrough);
 
         const resource = createAudioResource(passThrough, { inputType: StreamType.Raw, inlineVolume: false });
+        
+        // 🌟 サブBotのプレイヤーで再生（これでサブBotの口からあなたの声が出ます）
         subPlayer.play(resource);
 
         reverseMap.set(streamKey, { opusStream, decoder, passThrough });
@@ -231,7 +232,7 @@ async function findVoiceChannelForce(guild, target) {
 }
 
 /**
- * 🌟 接続処理（メインBotのスピーカーオフ解除版）
+ * 🌟 接続処理（サブBotへのプレイヤー再割り当て＆メインBotの同時購読方式）
  */
 function connectToVCs(guildId, mainChannel, sourceChannels) {
     try { getVoiceConnection(guildId, 'botMain')?.destroy(); } catch(e){}
@@ -241,7 +242,6 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         getOrCreateGuildResources(guildId, index + 1);
     });
 
-    // 🌟 修正ポイント：selfMute: false, selfDeaf: false を追加してスピーカーとマイクを強制解放します
     const connMain = joinVoiceChannel({ 
         channelId: mainChannel.id, 
         guildId, 
@@ -253,6 +253,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
     
     connMain.on(VoiceConnectionStatus.Ready, () => {
         console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（マルチプレイヤー同時購読パイプ駆動）。`);
+        // 🌟 プレイヤーをメインBotにも「同時に」購読させ、メインBotの部屋でも音が鳴るようにします
         sourceChannels.forEach((_, index) => {
             const { player } = getOrCreateGuildResources(guildId, index + 1);
             connMain.subscribe(player); 
@@ -274,9 +275,16 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
             selfDeaf: false, 
             group: `botSub_${index}` 
         });
+        
+        // 🌟 最重要修正：サブBot自身の通話接続（connSub）に、そのBot専用のプレイヤーを直結（subscribe）します！
+        // これにより、サブBotは「受信」だけでなく、その部屋のスピーカーとして声を出す能力を手に入れます。
+        const { player } = getOrCreateGuildResources(guildId, index + 1);
+        connSub.subscribe(player);
+
         setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
     });
 }
+
 
 
 /**
