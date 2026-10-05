@@ -296,6 +296,7 @@ clientMain.on('messageCreate', async (message) => {
         const args = message.content.split(' ');
         if (args.length < 2) return message.reply('❌ 使用法: !vcon [対象のサブBot番号(1, 2, ...)]');
         
+        // 💡 修正：args[1] からボット番号を取得するように修正
         const targetIndex = args[1].trim(); 
         const targetIdxNum = parseInt(targetIndex, 10);
         
@@ -313,6 +314,7 @@ clientMain.on('messageCreate', async (message) => {
         const args = message.content.split(' ');
         if (args.length < 2) return message.reply('❌ 使用法: !vcoff [対象のサブBot番号(1, 2, ...)]');
         
+        // 💡 修正：args[1] からボット番号を取得するように修正
         const targetIndex = args[1].trim(); 
         const targetIdxNum = parseInt(targetIndex, 10);
         
@@ -326,6 +328,8 @@ clientMain.on('messageCreate', async (message) => {
     if (message.content.startsWith('!vol')) {
         const args = message.content.split(' ');
         if (args.length < 3) return message.reply('❌ 使用法: !vol [元VC番号(1, 2, ...)] [音量%(0〜300)]');
+        
+        // 💡 修正：args[1] と args[2] からそれぞれ正しくパース
         const targetIndex = args[1].trim();
         const value = parseInt(args[2], 10);
         if (isNaN(parseInt(targetIndex)) || parseInt(targetIndex) < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
@@ -398,6 +402,7 @@ clientMain.on('messageCreate', async (message) => {
         const args = message.content.split(' ');
         if (args.length < 3) return message.reply('❌ 使用法: !setvc [大域VC] [元VC1] [元VC2]... (最小1個〜無限拡張対応)');
         
+        // 💡 修正：args[1] から大域VC名を取得するように修正
         const targetMainName = args[1];
         const targetSourceNames = args.slice(2);
 
@@ -472,6 +477,7 @@ clientMain.on('messageCreate', async (message) => {
         } catch (error) { console.error(error); return message.reply('❌ 再接続エラー'); }
     }
 });
+
 
 
 clientMain.once('ready', () => { console.log(`🚀 司令塔Botが正常に起動しました！`); });
