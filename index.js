@@ -5,7 +5,7 @@ const prism = require('prism-media');
 const fs = require('fs');
 const path = require('path');
 const { PassThrough } = require('stream'); 
-const { Mixer } = require('audio-mixer'); // 🌟 オーディオミキサーライブラリを追加
+const { Mixer } = require('audio-mixer'); // オーディオミキサーライブラリ
 
 // 🌟 Render無料プラン対策
 const http = require('http');
@@ -32,13 +32,12 @@ const guildVolumes = new Map();       // 各ギルドの音量設定
 const guildActiveStreams = new Map();  // 各ギルドの稼働中ストリームを管理
 
 /**
- * 🌟 バッファプレッシャー対策版 リソース管理関数
- * 1つの共有プレイヤーではなく、ソースIndex（Bot）ごとに「独立したミキサーとプレイヤー」を生成します。
+ * 🌟 バッファプレッシャー対策版 リソース管理関数（%対応版）
  */
 function getOrCreateGuildResources(guildId, sourceIndex) {
     const idxStr = String(sourceIndex);
 
-    // 1. 各種ベースMapの存在を徹底担保
+    // 各種ベースMapの存在を徹底担保
     if (!guildPlayers.has(guildId)) guildPlayers.set(guildId, new Map());
     if (!guildMixers.has(guildId)) guildMixers.set(guildId, new Map());
     if (!guildVolumes.has(guildId)) guildVolumes.set(guildId, new Map());
@@ -47,7 +46,7 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
     const playersMap = guildPlayers.get(guildId);
     const mixersMap = guildMixers.get(guildId);
 
-    // 2. 指定された sourceIndex のミキサーやプレイヤーが存在しない場合は「絶対に」その場で作る
+    // 指定された sourceIndex のミキサーやプレイヤーが存在しない場合はその場で作る
     if (!playersMap.has(idxStr) || !mixersMap.has(idxStr)) {
         // マスターミキサーを最優先で実体化
         const mixer = new Mixer({
@@ -72,19 +71,17 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
         player.play(mixerResource);
     }
 
-    // 3. 確実に存在するオブジェクトを返す
     return { 
         player: playersMap.get(idxStr),
         mixer: mixersMap.get(idxStr)
     };
 }
 
-
 const createClient = () => new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const clientMain = createClient();
 const subClients = [];
 /**
- * 🌟 バッファプレッシャー・フリーズ完全対策版 音声受信セットアップ
+ * 🌟 バッファプレッシャー・フリーズ完全対策版 音声受信セットアップ（%対応完全版）
  */
 function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
     const receiver = connection.receiver;
@@ -115,18 +112,18 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
         // 音声のデコードラインを結合
         opusStream.pipe(decoder).pipe(passThrough);
 
-        // 🌟 対策：ミキサー内部に、このユーザーのこの発言のためだけの「一時的な入力口」を動的作成
+        // ミキサー内部に、このユーザーの発言専用の入力口を動的作成
         const mixerInput = mixer.makeNewInput({
             channels: 2,
             bitDepth: 16,
             sampleRate: 48000,
-            volume: 100 // デフォルト100%
+            volume: 100 
         });
 
-        // 保存されている音量設定を適用
+        // 🌟 保存されている音量設定（%数値）をそのまま適用（初期値は100）
         const volMap = guildVolumes.get(guildId);
-        const currentVol = volMap?.get(String(sourceIndex)) ?? 1.0;
-        mixerInput.setVolume(currentVol); // 1.0倍なら100%
+        const currentVol = volMap?.get(String(sourceIndex)) ?? 100;
+        mixerInput.setVolume(currentVol); 
 
         // デコードされたストリームを入力口へパイプ結合
         passThrough.pipe(mixerInput);
@@ -208,7 +205,6 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         setupVoiceReceiver(connSub, `Sub_${index + 1}`, guildId, index + 1);
     });
 }
-
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     const currentGuildId = message.guildId;
@@ -218,21 +214,21 @@ clientMain.on('messageCreate', async (message) => {
     // 🎵 音量変更コマンド (!vol)
     if (message.content.startsWith('!vol')) {
         const args = message.content.split(' ');
-        if (args.length < 3) return message.reply('❌ 使用法: !vol [元VC番号(1, 2, ...)] [倍率(0.0〜300)]');
+        if (args.length < 3) return message.reply('❌ 使用法: !vol [元VC番号(1, 2, ...)] [音量%(0〜300)]');
         const targetIndex = args[1].trim();
-        const value = parseFloat(args[2]);
+        const value = parseInt(args[2], 10);
         if (isNaN(parseInt(targetIndex)) || parseInt(targetIndex) < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
-        if (isNaN(value) || value < 0 || value > 300) return message.reply('❌ 倍率は 0.0 〜 300 にしてください。');
+        if (isNaN(value) || value < 0 || value > 300) return message.reply('❌ 音量は 0 〜 300 (%) の範囲で指定してください。');
 
         if (!guildVolumes.has(currentGuildId)) guildVolumes.set(currentGuildId, new Map());
         guildVolumes.get(currentGuildId).set(String(targetIndex), value);
 
-        // 🌟 ミキサー入力へのリアルタイム音量反映
+        // ミキサー入力へのリアルタイム音量反映
         const activeStreams = guildActiveStreams.get(currentGuildId);
         if (activeStreams) {
             for (const [key, streamData] of activeStreams.entries()) {
                 if (key.startsWith(`${targetIndex}_`)) {
-                    // mixerInputの音量を更新 (1.0倍なら100)
+                    // ％数値をそのままミキサー入力に注入
                     streamData.mixerInput.setVolume(value);
                 }
             }
@@ -262,11 +258,9 @@ clientMain.on('messageCreate', async (message) => {
                 if (connSub) { connSub.destroy(); disconnected = true; }
             }
 
-            // 🌟 プレイヤーとミキサーのマップキャッシュをクリーンアップ
             if (guildPlayers.has(currentGuildId)) guildPlayers.delete(currentGuildId);
             if (guildMixers.has(currentGuildId)) guildMixers.delete(currentGuildId);
             
-            // 🌟 稼働中ストリームの完全一斉物理解体
             const activeStreams = guildActiveStreams.get(currentGuildId);
             if (activeStreams) {
                 for (const streamData of activeStreams.values()) {
@@ -325,8 +319,9 @@ clientMain.on('messageCreate', async (message) => {
 
             let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細 / ミキサー駆動】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
-                const v = volMap.get(String(idx + 1)) ?? 1.0;
-                vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v * 100}%**)`;
+                // デフォルト初期値を 100(%) とし、そのままパーセント表示
+                const v = volMap.get(String(idx + 1)) ?? 100;
+                vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
             });
 
             message.reply(`✅ 各部屋の独立ミキサー中継を開始しました！${vcDetailMsg}`);
@@ -360,8 +355,9 @@ clientMain.on('messageCreate', async (message) => {
 
             let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細 / ミキサー駆動】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
-                const v = volMap.get(String(idx + 1)) ?? 1.0;
-                vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v * 100}%**)`;
+                // デフォルト初期値を 100(%) とし、そのままパーセント表示
+                const v = volMap.get(String(idx + 1)) ?? 100;
+                vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
             });
 
             message.reply(`♻️ 前回の設定・音量をロードして中継を再開しました！${vcDetailMsg}`);
