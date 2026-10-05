@@ -359,30 +359,36 @@ clientMain.on('messageCreate', async (message) => {
     const guild = clientMain.guilds.cache.get(currentGuildId);
     if (!guild) return;
 
-    // 🌟 新設：逆方向発言オンコマンド (!vcon [Bot番号])
+    // 🌟 修正ポイント：引数の配列から[1]番目（Bot番号）を確実に抽出します
     if (message.content.startsWith('!vcon')) {
         const args = message.content.split(' ');
         if (args.length < 2) return message.reply('❌ 使用法: !vcon [対象のサブBot番号(1, 2, ...)]');
-        const targetIndex = args[1].trim();
-        if (isNaN(parseInt(targetIndex)) || parseInt(targetIndex) < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
+        
+        const targetIndex = args[1].trim(); // 🌟 [1]を追加して確実に数値をパース
+        const targetIdxNum = parseInt(targetIndex, 10);
+        
+        if (isNaN(targetIdxNum) || targetIdxNum < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
 
         const connMain = getVoiceConnection(currentGuildId, 'botMain');
         if (!connMain) return message.reply('❌ メインBotがまだVCに参加していません。');
 
-        // 逆方向中継のセットアップを実行（発言者はコマンドを打った本人に固定）
-        setupReverseVoiceReceiver(connMain, currentGuildId, targetIndex, message.author.id);
-        return message.reply(`🎙️ メインBot ➔ 聴く係Bot ${targetIndex} への逆方向拡声がオンになりました。メインBotの部屋で喋ると、指定した部屋に声が流れます。`);
+        // 逆方向中継のセットアップを実行（指定されたサブBot番号へあなたの声をバインド）
+        setupReverseVoiceReceiver(connMain, currentGuildId, targetIdxNum, message.author.id);
+        return message.reply(`🎙️ メインBot ➔ 聴く係Bot ${targetIdxNum} への逆方向拡声がオンになりました。メインBotの部屋で喋ると、指定した部屋に声が流れます。`);
     }
 
-    // 🌟 新設：逆方向発言オフコマンド (!vcoff [Bot番号])
+    // 🌟 修正ポイント：同様に[1]番目（Bot番号）を抽出してオフにします
     if (message.content.startsWith('!vcoff')) {
         const args = message.content.split(' ');
         if (args.length < 2) return message.reply('❌ 使用法: !vcoff [対象のサブBot番号(1, 2, ...)]');
-        const targetIndex = args[1].trim();
-        if (isNaN(parseInt(targetIndex)) || parseInt(targetIndex) < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
+        
+        const targetIndex = args[1].trim(); // 🌟 [1]を追加
+        const targetIdxNum = parseInt(targetIndex, 10);
+        
+        if (isNaN(targetIdxNum) || targetIdxNum < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
 
-        stopReverseVoiceReceiver(currentGuildId, targetIndex);
-        return message.reply(`🔕 聴く係Bot ${targetIndex} への逆方向拡声を設定解除（オフ）にしました。`);
+        stopReverseVoiceReceiver(currentGuildId, targetIdxNum);
+        return message.reply(`🔕 聴く係Bot ${targetIdxNum} への逆方向拡声を設定解除（オフ）にしました。`);
     }
 
     // 🎵 音量変更コマンド (!vol)
@@ -397,12 +403,10 @@ clientMain.on('messageCreate', async (message) => {
         if (!guildVolumes.has(currentGuildId)) guildVolumes.set(currentGuildId, new Map());
         guildVolumes.get(currentGuildId).set(String(targetIndex), value);
 
-        // 各プレイヤーの音量リソースへリアルタイム音量反映
         const activeStreams = guildActiveStreams.get(currentGuildId);
         if (activeStreams) {
             for (const [key, streamData] of activeStreams.entries()) {
                 if (key.startsWith(`${targetIndex}_`)) {
-                    // ％数値をDiscord.jsが理解できる倍率（100% = 1.0）に変換して即時適用
                     streamData.resource.volume.setVolume(value / 100);
                 }
             }
@@ -432,10 +436,8 @@ clientMain.on('messageCreate', async (message) => {
                 if (connSub) { connSub.destroy(); disconnected = true; }
             }
 
-            // プレイヤーのマップキャッシュをクリーンアップ
             if (guildPlayers.has(currentGuildId)) guildPlayers.delete(currentGuildId);
             
-            // 逆方向中継用マップのクリーンアップ
             if (guildReverseStreams.has(currentGuildId)) {
                 const reverseMap = guildReverseStreams.get(currentGuildId);
                 for (const key of reverseMap.keys()) {
@@ -444,7 +446,6 @@ clientMain.on('messageCreate', async (message) => {
                 guildReverseStreams.delete(currentGuildId);
             }
 
-            // 稼働中ストリームの完全一斉物理解体（バッファ残存防止）
             const activeStreams = guildActiveStreams.get(currentGuildId);
             if (activeStreams) {
                 for (const streamData of activeStreams.values()) {
@@ -459,9 +460,10 @@ clientMain.on('messageCreate', async (message) => {
                 activeStreams.clear();
             }
 
-            return message.reply(disconnected ? '👋 ボットがすべてのVCから退出しました。' : '❓ 参加していません。');
+            return message.reply(disconnected ? '👋 ボットがすべてのVCから退出しました。残存キャッシュとバッファを完全に消去しました。' : '❓ 参加していません。');
         } catch (e) { console.error(e); return message.reply('❌ 退出エラー'); }
     }
+
     // 接続・中継開始コマンド (!setvc)
     if (message.content.startsWith('!setvc')) {
         const args = message.content.split(' ');
