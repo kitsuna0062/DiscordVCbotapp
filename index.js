@@ -124,7 +124,7 @@ function setupVoiceReceiver(connection, sourceName, guildId, sourceIndex) {
         // 保存されている音量設定を適用
         const volMap = guildVolumes.get(guildId);
         const currentVol = volMap?.get(String(sourceIndex)) ?? 1.0;
-        mixerInput.setVolume(currentVol * 100); // 1.0倍なら100%
+        mixerInput.setVolume(currentVol); // 1.0倍なら100%
 
         // デコードされたストリームを入力口へパイプ結合
         passThrough.pipe(mixerInput);
@@ -212,11 +212,11 @@ clientMain.on('messageCreate', async (message) => {
     // 🎵 音量変更コマンド (!vol)
     if (message.content.startsWith('!vol')) {
         const args = message.content.split(' ');
-        if (args.length < 3) return message.reply('❌ 使用法: !vol [元VC番号(1, 2, ...)] [倍率(0.0〜3.0)]');
+        if (args.length < 3) return message.reply('❌ 使用法: !vol [元VC番号(1, 2, ...)] [倍率(0.0〜300)]');
         const targetIndex = args[1].trim();
         const value = parseFloat(args[2]);
         if (isNaN(parseInt(targetIndex)) || parseInt(targetIndex) < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
-        if (isNaN(value) || value < 0 || value > 3.0) return message.reply('❌ 倍率は 0.0 〜 3.0 にしてください。');
+        if (isNaN(value) || value < 0 || value > 300) return message.reply('❌ 倍率は 0.0 〜 300 にしてください。');
 
         if (!guildVolumes.has(currentGuildId)) guildVolumes.set(currentGuildId, new Map());
         guildVolumes.get(currentGuildId).set(String(targetIndex), value);
@@ -227,7 +227,7 @@ clientMain.on('messageCreate', async (message) => {
             for (const [key, streamData] of activeStreams.entries()) {
                 if (key.startsWith(`${targetIndex}_`)) {
                     // mixerInputの音量を更新 (1.0倍なら100)
-                    streamData.mixerInput.setVolume(value * 100);
+                    streamData.mixerInput.setVolume(value);
                 }
             }
         }
@@ -240,7 +240,7 @@ clientMain.on('messageCreate', async (message) => {
             configData[currentGuildId].volumes[targetIndex] = value;
             fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
         } catch (e) { console.error(e); }
-        return message.reply(`🔊 元VC ${targetIndex} の音量を ${value}倍 に変更しました。(ミキサーへ即時適用されました)`);
+        return message.reply(`🔊 元VC ${targetIndex} の音量を ${value}% に変更しました。(ミキサーへ即時適用されました)`);
     }
 
     if (!message.content.startsWith('!setvc') && message.content !== '!connect' && message.content !== '!vcleave') return;
@@ -320,7 +320,7 @@ clientMain.on('messageCreate', async (message) => {
             let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細 / ミキサー駆動】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
                 const v = volMap.get(String(idx + 1)) ?? 1.0;
-                vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}倍**)`;
+                vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v * 100}%**)`;
             });
 
             message.reply(`✅ 各部屋の独立ミキサー中継を開始しました！${vcDetailMsg}`);
@@ -355,7 +355,7 @@ clientMain.on('messageCreate', async (message) => {
             let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細 / ミキサー駆動】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
                 const v = volMap.get(String(idx + 1)) ?? 1.0;
-                vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}倍**)`;
+                vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v * 100}%**)`;
             });
 
             message.reply(`♻️ 前回の設定・音量をロードして中継を再開しました！${vcDetailMsg}`);
