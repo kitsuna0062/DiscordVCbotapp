@@ -259,13 +259,30 @@ clientMain.on('messageCreate', async (message) => {
     const guild = clientMain.guilds.cache.get(currentGuildId);
     if (!guild) return;
 
+    // 💡 メッセージを半角スペースで区切り、配列（args）にする
+    const args = message.content.trim().split(/ +/);
+    const command = args[0]; // 1番最初の単語（!vcon や !vcoff など）
+
+    // 🔕 逆方向拡声オフコマンド (!vcoff)
+    if (command === '!vcoff') {
+        if (args.length < 2) return message.reply('❌ 使用法: !vcoff [対象のサブBot番号(1, 2, ...)]');
+        
+        // 🛠【修正】args[1] を正しく取得
+        const targetIndex = args[1]; 
+        const targetIdxNum = parseInt(targetIndex, 10);
+        
+        if (isNaN(targetIdxNum) || targetIdxNum < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
+
+        stopReverseVoiceReceiver(currentGuildId, targetIdxNum);
+        return message.reply(`🔕 聴く係Bot ${targetIdxNum} への逆方向拡声を設定解除（オフ）にしました。`);
+    }
+
     // 🎙️ 逆方向拡声オンコマンド (!vcon)
-    if (message.content.startsWith('!vcon')) {
-        const args = message.content.split(' ');
+    if (command === '!vcon') {
         if (args.length < 2) return message.reply('❌ 使用法: !vcon [対象のサブBot番号(1, 2, ...)]');
         
-        // 💡 修正：args[1] からボット番号を取得するように修正
-        const targetIndex = args[1].trim(); 
+        // 🛠【修正】args[1] を正しく取得
+        const targetIndex = args[1]; 
         const targetIdxNum = parseInt(targetIndex, 10);
         
         if (isNaN(targetIdxNum) || targetIdxNum < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
@@ -277,28 +294,12 @@ clientMain.on('messageCreate', async (message) => {
         return message.reply(`🎙️ メインBot ➔ 聴く係Bot ${targetIdxNum} への逆方向拡声がオンになりました。メインBotの部屋で喋ると、指定した部屋に声が流れます。`);
     }
 
-    // 🔕 逆方向拡声オフコマンド (!vcoff)
-    if (message.content.startsWith('!vcoff')) {
-        const args = message.content.split(' ');
-        if (args.length < 2) return message.reply('❌ 使用法: !vcoff [対象のサブBot番号(1, 2, ...)]');
-        
-        // 💡 修正：args[1] からボット番号を取得するように修正
-        const targetIndex = args[1].trim(); 
-        const targetIdxNum = parseInt(targetIndex, 10);
-        
-        if (isNaN(targetIdxNum) || targetIdxNum < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
-
-        stopReverseVoiceReceiver(currentGuildId, targetIdxNum);
-        return message.reply(`🔕 聴く係Bot ${targetIdxNum} への逆方向拡声を設定解除（オフ）にしました。`);
-    }
-
     // 🎵 音量変更コマンド (!vol)
-    if (message.content.startsWith('!vol')) {
-        const args = message.content.split(' ');
+    if (command === '!vol') {
         if (args.length < 3) return message.reply('❌ 使用法: !vol [元VC番号(1, 2, ...)] [音量%(0〜300)]');
         
-        // 💡 修正：args[1] と args[2] からそれぞれ正しくパース
-        const targetIndex = args[1].trim();
+        // 🛠【修正】args[1] と args[2] を正しく取得
+        const targetIndex = args[1];
         const value = parseInt(args[2], 10);
         if (isNaN(parseInt(targetIndex)) || parseInt(targetIndex) < 1) return message.reply('❌ 番号は1以上の数値にしてください。');
         if (isNaN(value) || value < 0 || value > 300) return message.reply('❌ 音量は 0 〜 300 (%) の範囲で指定してください。');
@@ -327,7 +328,7 @@ clientMain.on('messageCreate', async (message) => {
     }
 
     // 🚪 退出コマンド (!vcleave)
-    if (message.content === '!vcleave') {
+    if (command === '!vcleave') {
         try {
             let disconnected = false;
             const connMain = getVoiceConnection(currentGuildId, 'botMain');
@@ -351,7 +352,6 @@ clientMain.on('messageCreate', async (message) => {
             if (activeStreams) {
                 for (const streamData of activeStreams.values()) {
                     try {
-                        // 🛠【追加】退出時に喋りっぱなしのプレイヤーがいれば強制ストップ
                         if (streamData.player) {
                             streamData.player.stop(true);
                         }
@@ -370,11 +370,10 @@ clientMain.on('messageCreate', async (message) => {
     }
 
     // 接続・中継開始コマンド (!setvc)
-    if (message.content.startsWith('!setvc')) {
-        const args = message.content.split(' ');
+    if (command === '!setvc') {
         if (args.length < 3) return message.reply('❌ 使用法: !setvc [大域VC] [元VC1] [元VC2]... (最小1個〜無限拡張対応)');
         
-        // 💡 修正：args[1] から大域VC名を取得するように修正
+        // 🛠【修正】args[1] とそれ以降の配列スライスを修正
         const targetMainName = args[1];
         const targetSourceNames = args.slice(2);
 
@@ -415,7 +414,7 @@ clientMain.on('messageCreate', async (message) => {
     }
 
     // ♻️ 履歴から再接続コマンド (!connect)
-    if (message.content === '!connect') {
+    if (command === '!connect') {
         if (!fs.existsSync(CONFIG_FILE)) return message.reply('❌ 履歴なし');
         try {
             const configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
@@ -449,9 +448,6 @@ clientMain.on('messageCreate', async (message) => {
         } catch (error) { console.error(error); return message.reply('❌ 再接続エラー'); }
     }
 });
-
-
-
 clientMain.once('ready', () => { console.log(`🚀 司令塔Botが正常に起動しました！`); });
 process.on('uncaughtException', (err) => { if (!err.message.includes('Premature close') && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error(' [システム警告]:', err); });
 
