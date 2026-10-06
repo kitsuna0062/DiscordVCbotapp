@@ -59,6 +59,9 @@ const subClients = [];
 /**
  * 🌟 サブBotからメインBotのプレイヤーへ音声を中継するセットアップ
  */
+/**
+ * 🌟 サブBotからメインBotのプレイヤーへ音声を中継するセットアップ
+ */
 function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex, mainConnection) {
     const receiver = connection.receiver;
     const activeStreams = guildActiveStreams.get(guildId);
@@ -97,7 +100,6 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
         const userSpecificPlayer = createAudioPlayer();
         userSpecificPlayer.on('error', () => {});
         
-        // メインボットのコネクションにユーザー専用プレイヤーを購読させる
         mainConnection.subscribe(userSpecificPlayer);
         userSpecificPlayer.play(resource);
 
@@ -129,9 +131,10 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
 }
 
 /**
- * 🌟 逆方向中継：メインBotの声を「サブBotのプレイヤー」へ直接流し込む
+ * 🌟 新・逆方向中継：メインBotの声を「サブBotのプレイヤー」へ流し込む（全員ミックス or 特定の人のみ）
+ * 💡 引数に isOnly モードを追加し、複数人の同時ミキシングに対応させました。
  */
-function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUserId) {
+function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUserId, isOnly = false) {
     if (!guildReverseStreams.has(guildId)) guildReverseStreams.set(guildId, new Map());
     const reverseMap = guildReverseStreams.get(guildId);
     
@@ -140,19 +143,20 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
     }
 
     const receiver = connMain.receiver;
-    const { player: subPlayer } = getOrCreateGuildResources(guildId, targetSubIndex);
 
-    console.log(`📡 [ギルド: ${guildId}] 大域Bot -> サブBot ${targetSubIndex} への逆方向音声中継を準備中...`);
+    console.log(`📡 [ギルド: ${guildId}] 大域Bot -> サブBot ${targetSubIndex} への逆方向音声中継を準備中... (${isOnly ? 'オンリーモード' : '全員ミキサーモード'})`);
 
     const startHandler = (userId) => {
-        if (userId !== speakerUserId) return; 
+        // 💡 isOnlyがtrueなら、コマンド実行者以外の声は完全に無視（オンリーモード）
+        if (isOnly && userId !== speakerUserId) return; 
         
-        const streamKey = `reverse_${targetSubIndex}`;
+        // 💡 ユーザーごとに独立したストリームキーを作成（これで複数人が同時に喋っても混ざるようになります）
+        const streamKey = `reverse_${targetSubIndex}_${userId}`;
         if (reverseMap.has(streamKey)) return;
 
-        console.log(`📢 [ギルド: ${guildId}] 大域Botの声を検知 ➔ サブBot ${targetSubIndex} のスピーカーへ流し込み中...`);
+        console.log(`📢 [ギルド: ${guildId}] メインVCの声を検知 ➔ サブBot ${targetSubIndex} へ流し込み中... (ユーザー: ${userId})`);
 
-        const opusStream = receiver.subscribe(speakerUserId, { end: { behavior: EndBehaviorType.Manual } });
+        const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
         const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
         const passThrough = new PassThrough({ highWaterMark: 1024 * 16 });
 
@@ -161,33 +165,44 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
 
         const resource = createAudioResource(passThrough, { inputType: StreamType.Raw, inlineVolume: false });
         
-        subPlayer.play(resource);
+        // 💡 逆方向でも、バッファ詰まりを防止するためにユーザー専用のプレイヤーをその場で作ってサブBotの接続に直結
+        const userSpecificReversePlayer = createAudioPlayer();
+        userSpecificReversePlayer.on('error', () => {});
 
-        reverseMap.set(streamKey, { opusStream, decoder, passThrough });
+        const connSub = getVoiceConnection(guildId, `botSub_${targetSubIndex - 1}`);
+        if (connSub) {
+            connSub.subscribe(userSpecificReversePlayer);
+            userSpecificReversePlayer.play(resource);
+        }
+
+        reverseMap.set(streamKey, { opusStream, decoder, passThrough, player: userSpecificReversePlayer });
     };
 
     const endHandler = (userId) => {
-        if (userId !== speakerUserId) return;
-        const streamKey = `reverse_${targetSubIndex}`;
+        if (isOnly && userId !== speakerUserId) return;
+        const streamKey = `reverse_${targetSubIndex}_${userId}`;
         const streamData = reverseMap.get(streamKey);
         if (!streamData) return;
 
-        const { opusStream, decoder, passThrough } = streamData;
+        const { opusStream, decoder, passThrough, player } = streamData;
         setTimeout(() => {
             try {
-                subPlayer.stop(true);
+                if (player) {
+                    player.stop(true); // 内部キャッシュを完全解放
+                }
                 decoder.unpipe(passThrough); opusStream.unpipe(decoder);
                 passThrough.destroy(); decoder.destroy(); opusStream.destroy();
             } catch(e){}
             reverseMap.delete(streamKey);
-            console.log(`🧹 [ギルド: ${guildId}] 逆方向ストリーム一時解放。`);
+            console.log(`🧹 [ギルド: ${guildId}] 逆方向個別ストリーム解放。`);
         }, 150);
     };
 
     receiver.speaking.on('start', startHandler);
     receiver.speaking.on('end', endHandler);
 
-    reverseMap.set(targetSubIndex, { startHandler, endHandler, speakerUserId });
+    // 停止コマンドのためにイベントハンドラを記憶
+    reverseMap.set(targetSubIndex, { startHandler, endHandler, isOnly, speakerUserId });
 }
 
 /**
@@ -205,19 +220,21 @@ function stopReverseVoiceReceiver(guildId, targetSubIndex) {
     }
     reverseMap.delete(targetSubIndex);
 
-    const streamKey = `reverse_${targetSubIndex}`;
-    const streamData = reverseMap.get(streamKey);
-    if (streamData) {
-        try {
-            streamData.decoder.unpipe(streamData.passThrough);
-            streamData.opusStream.unpipe(streamData.decoder);
-            streamData.passThrough.destroy();
-            streamData.decoder.destroy();
-            streamData.opusStream.destroy();
-        } catch(e){}
-        reverseMap.delete(streamKey);
+    // 💡 このサブBot宛てに作られた全ユーザーのストリームをすべて綺麗に破壊
+    for (const [key, streamData] of reverseMap.entries()) {
+        if (key.startsWith(`reverse_${targetSubIndex}_`)) {
+            try {
+                if (streamData.player) streamData.player.stop(true);
+                streamData.decoder.unpipe(streamData.passThrough);
+                streamData.opusStream.unpipe(streamData.decoder);
+                streamData.passThrough.destroy();
+                streamData.decoder.destroy();
+                streamData.opusStream.destroy();
+            } catch(e){}
+            reverseMap.delete(key);
+        }
     }
-    console.log(`🔕 [ギルド: ${guildId}] サブBot ${targetSubIndex} への逆方向中継を完全オフにしました。`);
+    console.log(`🔕 [ギルド: ${guildId}] サブBot ${targetSubIndex} への逆方向中継（拡声機能）を完全オフにしました。`);
 }
 
 async function findVoiceChannelForce(guild, target) {
@@ -276,6 +293,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
     });
 }
+
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     const currentGuildId = message.guildId;
@@ -299,9 +317,9 @@ clientMain.on('messageCreate', async (message) => {
         return message.reply(`🔕 聴く係Bot ${targetIdxNum} への逆方向拡声を設定解除（オフ）にしました。`);
     }
 
-    // 🎙️ 逆方向拡声オンコマンド (!vcon)
-    if (command === '!vcon') {
-        if (args.length < 2) return message.reply('❌ 使用法: !vcon [対象のサブBot番号(1, 2, ...)]');
+    // 🎙️ 逆方向拡声オンコマンド (!vcon または !vcononly)
+    if (command === '!vcon' || command === '!vcononly') {
+        if (args.length < 2) return message.reply('❌ 使用法:\n・全員中継: !vcon [サブBot番号]\n・自分のみ: !vcon [サブBot番号] only または !vcononly [サブBot番号]');
         
         const targetIndex = args[1]; 
         const targetIdxNum = parseInt(targetIndex, 10);
@@ -311,8 +329,16 @@ clientMain.on('messageCreate', async (message) => {
         const connMain = getVoiceConnection(currentGuildId, 'botMain');
         if (!connMain) return message.reply('❌ メインBotがまだVCに参加していません。');
 
-        setupReverseVoiceReceiver(connMain, currentGuildId, targetIdxNum, message.author.id);
-        return message.reply(`🎙️ メインBot ➔ 聴く係Bot ${targetIdxNum} への逆方向拡声がオンになりました。メインBotの部屋で喋ると、指定した部屋に声が流れます。`);
+        // 💡 末尾に "only" がついているか、またはコマンド自体が !vcononly の場合はオンリーモード(true)にする
+        const isOnlyMode = (command === '!vcononly') || (args[2]?.toLowerCase() === 'only');
+
+        setupReverseVoiceReceiver(connMain, currentGuildId, targetIdxNum, message.author.id, isOnlyMode);
+
+        if (isOnlyMode) {
+            return message.reply(`🎙️ 【オンリーモード】メインBot ➔ 聴く係Bot ${targetIdxNum} への逆方向拡声を開始。**あなたの声だけ**が指定した部屋に流れます。`);
+        } else {
+            return message.reply(`🎙️ 【全員ミキサーモード】メインBot ➔ 聴く係Bot ${targetIdxNum} への逆方向拡声を開始。メインVCにいる**全員の声がミックスされて**指定した部屋に流れます。`);
+        }
     }
 
     // 🎵 音量変更コマンド (!vol)
@@ -467,6 +493,7 @@ clientMain.on('messageCreate', async (message) => {
         } catch (error) { console.error(error); return message.reply('❌ 再接続エラー'); }
     }
 });
+
 clientMain.once('ready', () => { 
     console.log(`🚀 司令塔Botが正常に起動しました！`); 
 });
