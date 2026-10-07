@@ -6,12 +6,6 @@ const fs = require('fs');
 const path = require('path');
 const { PassThrough } = require('stream'); 
 
-// 🌟 Render無料プラン対策（ダミーWebサーバー）
-const http = require('http');
-http.createServer((req, res) => { res.writeHead(200); res.end('OK'); }).listen(process.env.PORT || 3000, () => {
-    console.log(`🌍 RenderのWebチェックに合格しました。ダミーWebポートを開放中...`);
-});
-
 // 🌟 環境変数トークンの読み込み
 const TOKENS = {
     botMain: process.env.DISCORD_TOKEN_MAIN,
@@ -697,7 +691,18 @@ process.on('uncaughtException', (err) => {
             subClients.push(subClient);
         }
         console.log(`🚀 すべてのBot（合計 ${subClients.length + 1} 台）が正常に起動しました！同時購読中継システム稼働準備完了。`);
+
+        // 🛠️ 【ここに追加！】すべてのBotがログインに成功した直後にポートを開放する
+        const http = require('http');
+        http.createServer((req, res) => { 
+            res.writeHead(200); 
+            res.end('OK'); 
+        }).listen(process.env.PORT || 3000, () => {
+            console.log(`🌍 RenderのWebチェックに合格しました。ダミーWebポートを開放中...`);
+        });
+
     } catch (err) { 
         console.error('❌ ログイン接続エラー:', err); 
     }
 })();
+
