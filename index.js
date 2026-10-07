@@ -627,17 +627,28 @@ process.on('uncaughtException', (err) => {
                     return interaction.reply({ content: '❌ 退出エラーが発生しました。', ephemeral: true }); 
                 }
             }
-            // 接続・中継開始コマンド (/setvc)
-            if (commandName === 'setvc') {
-                await interaction.deferReply();
+            // 接続・中継開始コマンド (/setvc
+    if (commandName === 'setvc') {
+        await interaction.deferReply();
 
-                const channelMain = options.getChannel('main_vc');
-                const sourceChannels = [
-                    options.getChannel('sub_vc_1'),
-                    options.getChannel('sub_vc_2'),
-                    options.getChannel('sub_vc_3')
-                ].filter(Boolean); 
-                
+        // 💡 簡易オブジェクトから、サーバーが持つ完全なボイスチャンネルデータをキャッシュから引き直す
+        const mainChannelRaw = options.getChannel('main_vc');
+        const channelMain = guild.channels.cache.get(mainChannelRaw?.id);
+
+        const subChannelIds = [
+            options.getChannel('sub_vc_1')?.id,
+            options.getChannel('sub_vc_2')?.id,
+            options.getChannel('sub_vc_3')?.id
+        ].filter(Boolean);
+
+        // 💡 キャッシュから完全なオブジェクトの配列を作成
+        const sourceChannels = subChannelIds
+            .map(id => guild.channels.cache.get(id))
+            .filter(Boolean);
+    
+        // 💡 履歴保存用のID配列を作っておく
+        const sourceChannelIds = sourceChannels.map(c => c.id);
+
                 if (!channelMain || sourceChannels.length === 0) {
                     return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。');
                 }
