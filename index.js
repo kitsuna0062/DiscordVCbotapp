@@ -6,6 +6,18 @@ const fs = require('fs');
 const path = require('path');
 const { PassThrough } = require('stream'); 
 
+// 🌟 【最優先】Renderのポートチェックを即座に突破させるためのWebサーバー
+const http = require('http');
+const server = http.createServer((req, res) => { 
+    res.writeHead(200, { 'Content-Type': 'text/plain' }); 
+    res.end('OK'); 
+});
+// RenderのPORT環境変数（10000番など）、なければ3000番で即座に待ち受け開始
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🌍 【Render対策】ポート ${PORT} を最優先で開放しました。Webチェックを通過させます。`);
+});
+
 // 🌟 環境変数トークンの読み込み
 const TOKENS = {
     botMain: process.env.DISCORD_TOKEN_MAIN,
@@ -635,6 +647,7 @@ clientMain.on('interactionCreate', async (interaction) => {
                 vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
             });
 
+            // ───（4分割目のコマンド処理の終わり部分）───
             return interaction.editReply(`♻️ 前回の設定・音量をロードして中継を再開しました！\n\n${vcDetailMsg}`);
         } catch (error) { 
             console.error(error); 
@@ -647,7 +660,6 @@ clientMain.on('interactionCreate', async (interaction) => {
 clientMain.once('ready', async () => { 
     console.log(`🚀 司令塔Botが正常に起動しました！`); 
     
-    // Discordのグローバル環境へスラッシュコマンドを一括デプロイ登録
     try {
         console.log('⏳ Discordサーバーへスラッシュコマンドを同期登録中...');
         await clientMain.application.commands.set(COMMANDS_DATA);
@@ -663,7 +675,7 @@ process.on('uncaughtException', (err) => {
     }
 });
 
-// 🌟 起動メインプロセス
+// 🌟 起動メインプロセス（純粋なログイン処理のみ）
 (async () => {
     try {
         if (!TOKENS.botMain || TOKENS.subs.length === 0) { 
@@ -675,6 +687,7 @@ process.on('uncaughtException', (err) => {
         console.log('【デバッグ】メインのトークンが読めているか:', TOKENS.botMain ? 'YES (文字数: ' + TOKENS.botMain.length + ')' : 'NO (空っぽです)');
         console.log('【デバッグ】認識したサブBotの台数:', TOKENS.subs.length, '台');
 
+        // ポートは最上部ですでに開いているので、Renderのブロックを受けずにログイン処理が走ります
         await clientMain.login(TOKENS.botMain);
 
         for (let i = 0; i < TOKENS.subs.length; i++) {
@@ -682,7 +695,7 @@ process.on('uncaughtException', (err) => {
             console.log(`🔗 聴く係Bot (${i + 1}/${TOKENS.subs.length}) に接続中...`);
             const subClient = createClient();
             
-            subClient.on('error', (err) => console.error(`[Sub_${i + 1} エラー]:`, err));
+            subClient.on('error', (err) => console.error(`[Sub_${i + 1} Эラー]:`, err));
             subClient.once('ready', () => { 
                 console.log(`✅ 聴く係Bot_${i + 1} オンライン。`); 
             });
@@ -690,19 +703,8 @@ process.on('uncaughtException', (err) => {
             await subClient.login(TOKENS.subs[i]);
             subClients.push(subClient);
         }
-        console.log(`🚀 すべてのBot（合計 ${subClients.length + 1} 台）が正常に起動しました！同時購読中継システム稼働準備完了。`);
-
-        // 🛠️ 【ここに追加！】すべてのBotがログインに成功した直後にポートを開放する
-        const http = require('http');
-        http.createServer((req, res) => { 
-            res.writeHead(200); 
-            res.end('OK'); 
-        }).listen(process.env.PORT || 3000, () => {
-            console.log(`🌍 RenderのWebチェックに合格しました。ダミーWebポートを開放中...`);
-        });
-
+        console.log(`🚀 すべてのBot（合計 ${subClients.length + 1} 台）が正常に起動しました！同時購読中継システム稼稼準備完了。`);
     } catch (err) { 
         console.error('❌ ログイン接続エラー:', err); 
     }
-})();
-
+})(); // 💡 ファイルの本当の最下部
