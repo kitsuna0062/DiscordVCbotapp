@@ -7,12 +7,12 @@ A Discord bot designed to relay and connect multiple voice channels (VCs) seamle
 ## 🔗 Invitation Links
 
 ### Main Bot
-- [Invite Main Bot to your server](https://discord.com)
+- [Invite Main Bot to your server](hhttps://discord.com/oauth2/authorize?client_id=1554405530024419389&permissions=8&integration_type=0&scope=bot+applications.commands)
 
 ### Secondary Bots
 To relay multiple voice channels, please invite the following secondary bots as well:
-1. [Invite Secondary Bot #1](https://discord.com)
-2. [Invite Secondary Bot #2](https://discord.com)
+1. [Invite Secondary Bot #1](https://discord.com/oauth2/authorize?client_id=1554373444458778634&permissions=8&integration_type=0&scope=bot+applications.commands)
+2. [Invite Secondary Bot #2](https://discord.com/oauth2/authorize?client_id=1554405070064459817&permissions=8&integration_type=0&scope=bot+applications.commands)
 
 ---
 
@@ -40,12 +40,12 @@ Discordのボイスチャンネル（VC）を中継・連携するためのBot�
 ## 🔗 ボットの招待リンク (Invitation Links)
 
 ### メインボット (Main Bot)
-- [メインボットをサーバーに招待する](https://discord.com/oauth2/authorize?client_id=1554405530024419389&permissions=8&integration_type=0&scope=bot)
+- [メインボットをサーバーに招待する](https://discord.com/oauth2/authorize?client_id=1554405530024419389&permissions=8&integration_type=0&scope=bot+applications.commands)
 
 ### サブボット (Secondary Bots)
 ボイスチャンネルを複数中継する場合、以下のサブボットもあわせて招待してください。
-1. [サブボット #1 を招待する](https://discord.com/oauth2/authorize?client_id=1554373444458778634&permissions=8&integration_type=0&scope=bot)
-2. [サブボット #2 を招待する](https://discord.com/oauth2/authorize?client_id=1554405070064459817&permissions=8&integration_type=0&scope=bot)
+1. [サブボット #1 を招待する](https://discord.com/oauth2/authorize?client_id=1554373444458778634&permissions=8&integration_type=0&scope=bot+applications.commands)
+2. [サブボット #2 を招待する](https://discord.com/oauth2/authorize?client_id=1554405070064459817&permissions=8&integration_type=0&scope=bot+applications.commands)
 
 ---
 
