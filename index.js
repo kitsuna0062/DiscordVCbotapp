@@ -6,17 +6,6 @@ const fs = require('fs');
 const path = require('path');
 const { PassThrough } = require('stream'); 
 
-// 🌟 【最優先】Renderのポートチェックを即座に突破させるためのWebサーバー
-const http = require('http');
-const server = http.createServer((req, res) => { 
-    res.writeHead(200, { 'Content-Type': 'text/plain' }); 
-    res.end('OK'); 
-});
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🌍 【Render対策】ポート ${PORT} を最優先で開放しました。Webチェックを通過させます。`);
-});
-
 // 🌟 環境変数トークンの読み込み
 const TOKENS = {
     botMain: process.env.DISCORD_TOKEN_MAIN,
@@ -59,23 +48,133 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
     return { player: playersMap.get(idxStr) };
 }
 
-// 🌟 Discordクライアント生成（通信の詰まりを回避する超強力リトライ仕様）
+// 🌟 Discordクライアント生成
 const createClient = () => new Client({ 
     intents: [
         GatewayIntentBits.Guilds, 
         GatewayIntentBits.GuildVoiceStates, 
         GatewayIntentBits.GuildMessages, 
         GatewayIntentBits.MessageContent
-    ],
-    rest: {
-        timeout: 5000,       // 応答を5秒待って来なければ切り替える
-        retries: 10,         // 自動で10回まで再試行して詰まりを突破する
-        globalRequestsPerSecond: 50
-    }
+    ]
 });
 
 const clientMain = createClient();
 const subClients = [];
+
+// 🌟 スラッシュコマンドの定義データ（/status を完全追加）
+const COMMANDS_DATA = [
+    // 📋 修正箇所：1分割目の COMMANDS_DATA 内の setvc の部分を以下に置き換えます
+    {
+        name: 'setvc',
+        description: 'ボイスチャンネルにボットを入室させ、中継経路を設定します。',
+        options: [
+            {
+                name: 'main_vc',
+                description: '大域Botが入るボイスチャンネルを選択してください',
+                type: ApplicationCommandOptionType.Channel, // 🛠️ Channel形式に変更
+                channel_types: [ChannelType.GuildVoice],   // 💡 ボイスチャンネルのみを候補に出す
+                required: true
+            },
+            {
+                name: 'sub_vc_1',
+                description: '聴く係Bot 1が入るボイスチャンネルを選択してください',
+                type: ApplicationCommandOptionType.Channel, // 🛠️ Channel形式に変更
+                channel_types: [ChannelType.GuildVoice],
+                required: true
+            },
+            {
+                name: 'sub_vc_2',
+                description: '聴く係Bot 2が入るボイスチャンネルを選択してください（任意）',
+                type: ApplicationCommandOptionType.Channel, // 🛠️ Channel形式に変更
+                channel_types: [ChannelType.GuildVoice],
+                required: false
+            },
+            {
+                name: 'sub_vc_3',
+                description: '聴く係Bot 3が入るボイスチャンネルを選択してください（任意）',
+                type: ApplicationCommandOptionType.Channel, // 🛠️ Channel形式に変更
+                channel_types: [ChannelType.GuildVoice],
+                required: false
+            }
+        ]
+    },
+    {
+        name: 'connect',
+        description: '前回の履歴（config.json）の設定を引き継いで再接続します。'
+    },
+    {
+        name: 'vcleave',
+        description: 'すべてのボイスチャンネルからボットを退室させます。'
+    },
+    {
+        name: 'vcon',
+        description: 'メインVCから特定のサブVCへの逆方向拡声をオンにします。',
+        options: [
+            {
+                name: 'number',
+                description: '対象のサブBot番号 (1, 2, ...)',
+                type: ApplicationCommandOptionType.Integer,
+                required: true
+            },
+            {
+                name: 'mode',
+                description: '拡声モード（全員ミキサー or コマンド実行者のみ）',
+                type: ApplicationCommandOptionType.String,
+                required: false,
+                choices: [
+                    { name: '全員ミックス (all)', value: 'all' },
+                    { name: '自分のみ (only)', value: 'only' }
+                ]
+            }
+        ]
+    },
+    {
+        name: 'vcononly',
+        description: '【自分のみ専用】メインVCから特定のサブVCへの逆方向拡声をオンにします。',
+        options: [
+            {
+                name: 'number',
+                description: '対象のサブBot番号 (1, 2, ...)',
+                type: ApplicationCommandOptionType.Integer,
+                required: true
+            }
+        ]
+    },
+    {
+        name: 'vcoff',
+        description: '指定したサブBotへの逆方向拡声をオフにします。',
+        options: [
+            {
+                name: 'number',
+                description: '対象のサブBot番号 (1, 2, ...)',
+                type: ApplicationCommandOptionType.Integer,
+                required: true
+            }
+        ]
+    },
+    {
+        name: 'vol',
+        description: '指定した元VC（サブBot）の受信音量を変更します。',
+        options: [
+            {
+                name: 'number',
+                description: '対象のサブBot番号 (1, 2, ...)',
+                type: ApplicationCommandOptionType.Integer,
+                required: true
+            },
+            {
+                name: 'volume',
+                description: '音量% (0〜300)',
+                type: ApplicationCommandOptionType.Integer,
+                required: true
+            }
+        ]
+    },
+    {
+        name: 'status',
+        description: '現在の中継接続ステータスとBotの稼働状況を表示します。'
+    }
+];
 /**
  * 🌟 サブBotからメインBotのプレイヤーへ音声を中継するセットアップ
  */
@@ -304,7 +403,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
     });
 }
 
-// 🌟 メインBotの起動イベント（※フリーズを避けるため、ここにコマンド登録処理は書きません）
+// 🌟 メインBotの起動イベント（※起動時の渋滞を避けるため、毎回自動でコマンド登録するコードは削除してあります）
 clientMain.once('ready', () => { 
     console.log(`🚀 司令塔Botが正常に起動しました！いつでもオンラインで待ち受け可能です。`); 
 });
@@ -326,10 +425,9 @@ process.on('uncaughtException', (err) => {
         console.log('【デバッグ】メインのトークンが読めているか:', TOKENS.botMain ? 'YES (文字数: ' + TOKENS.botMain.length + ')' : 'NO (空っぽです)');
         console.log('【デバッグ】認識したサブBotの台数:', TOKENS.subs.length, '台');
 
-        // ポートは最上部ですでに開いているので、Renderのブロックを受けずに最優先でログイン処理が走ります
         await clientMain.login(TOKENS.botMain);
 
-        // 🌟 ログインが完全に成功した直後の安全なタイミングで、スラッシュコマンドの受付窓口（イベント）を開く
+        // 🌟 スラッシュコマンドの受付窓口（イベント）
         clientMain.on('interactionCreate', async (interaction) => {
             if (!interaction.isChatInputCommand()) return;
 
@@ -338,6 +436,31 @@ process.on('uncaughtException', (err) => {
             if (!guild) return;
 
             const { commandName, options } = interaction;
+
+            // 📊 ステータス確認コマンド (/status)
+            if (commandName === 'status') {
+                let statusMsg = `📊 **【中継システム現在状況】**\n`;
+                
+                const connMain = getVoiceConnection(currentGuildId, 'botMain');
+                if (connMain) {
+                    statusMsg += `・📢 大域Bot (Main): 🟢 接続中 (<#${connMain.joinConfig.channelId}>)\n`;
+                } else {
+                    statusMsg += `・📢 大域Bot (Main): 🔴 未接続\n`;
+                }
+
+                for (let i = 0; i < TOKENS.subs.length; i++) {
+                    const connSub = getVoiceConnection(currentGuildId, `botSub_${i}`);
+                    if (connSub) {
+                        const volMap = guildVolumes.get(currentGuildId);
+                        const v = volMap?.get(String(i + 1)) ?? 100;
+                        statusMsg += `・🎧 聴く係Bot ${i + 1}: 🟢 接続中 (<#${connSub.joinConfig.channelId}>) [音量: ${v}%]\n`;
+                    } else {
+                        statusMsg += `・🎧 聴く係Bot ${i + 1}: 🔴 未接続\n`;
+                    }
+                }
+
+                return interaction.reply({ content: statusMsg });
+            }
 
             // 🎙️ 逆方向拡声オンコマンド (/vcon)
             if (commandName === 'vcon') {
@@ -473,26 +596,23 @@ process.on('uncaughtException', (err) => {
             if (commandName === 'setvc') {
                 await interaction.deferReply();
 
-                const targetMainName = options.getString('mainvc');
-                const targetSourceNames = [
-                    options.getString('subvc1'),
-                    options.getString('subvc2'),
-                    options.getString('subvc3')
-                ].filter(Boolean);
+                // 🛠️ getString から getChannel にすべて書き換えます
+                const channelMain = options.getChannel('main_vc');
+                const sourceChannels = [
+                    options.getChannel('sub_vc_1'),
+                    options.getChannel('sub_vc_2'),
+                    options.getChannel('sub_vc_3')
+                ].filter(Boolean); // 入力されたチャンネル（オブジェクト）のみを抽出
 
-                if (targetSourceNames.length > TOKENS.subs.length) {
-                    return interaction.editReply(`❌ 用意されているサブBotの数（最大 ${TOKENS.subs.length} 台）を超えています。`);
-                }
-
-                const channelMain = await findVoiceChannelForce(guild, targetMainName);
-                const sourceChannels = [];
-                for (const name of targetSourceNames) { 
-                    const ch = await findVoiceChannelForce(guild, name); 
-                    if (ch) sourceChannels.push(ch); 
-                }
+                // 💡 すでにDiscord側がボイスチャンネルオブジェクトを直接渡してくれているので、
+                // 以前あった「findVoiceChannelForce」でのチャンネル探索処理（約8行分）は丸ごと削除してください。
                 
                 if (!channelMain || sourceChannels.length === 0) {
-                    return interaction.editReply('❌ 指定されたボイスチャンネルが見つかりません。名前またはIDを正しく入力してください。');
+                    return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。');
+                }
+
+                if (sourceChannels.length > TOKENS.subs.length) {
+                    return interaction.editReply(`❌ 用意されているサブBotの数（最大 ${TOKENS.subs.length} 台）を超えています。`);
                 }
 
                 try {
