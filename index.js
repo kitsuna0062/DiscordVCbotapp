@@ -225,6 +225,7 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
 
         opusStream.pipe(decoder).pipe(passThrough);
 
+        // 💡 inputTypeをRawとして明示し、音量を有効化
         const resource = createAudioResource(passThrough, { 
             inputType: StreamType.Raw,
             inlineVolume: true 
@@ -250,6 +251,7 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
 
         const { opusStream, decoder, passThrough, player } = streamData;
 
+        // 💡 猶予時間を250msに延長し、パケット遅延による中継切れ（無音化）を防止
         setTimeout(() => {
             try { 
                 if (player) {
@@ -263,11 +265,12 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
             } catch(e){}
             activeStreams.delete(compositeKey);
             console.log(`🧹 [ギルド: ${guildId} / Bot: ${sourceName}] ストリーム＆プレイヤーキャッシュ完全解放。`);
-        }, 150);
+        }, 250);
     });
 }
+
 /**
- * 🌟 逆方向中継：メインBotの声を「サブBotのプレイヤー」へ流し込む
+ * 🌟 新・逆方向中継：メインBotの声を「サブBotのプレイヤー」へ流し込む（修正版）
  */
 function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUserId, isOnly = false) {
     if (!guildReverseStreams.has(guildId)) guildReverseStreams.set(guildId, new Map());
@@ -282,6 +285,11 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
     console.log(`📡 [ギルド: ${guildId}] 大域Bot -> サブBot ${targetSubIndex} への逆方向音声中継を準備中... (${isOnly ? 'オンリーモード' : '全員ミキサーモード'})`);
 
     const startHandler = (userId) => {
+        // 💡 ハウリング防止：ボット自身の声は絶対に逆中継しない
+        if (userId === clientMain.user?.id) return;
+        const isSubBot = subClients.some(sub => sub.user?.id === userId);
+        if (isSubBot) return;
+
         if (isOnly && userId !== speakerUserId) return; 
         
         const streamKey = `reverse_${targetSubIndex}_${userId}`;
@@ -296,6 +304,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
         opusStream.on('error', () => {}); decoder.on('error', () => {}); passThrough.on('error', () => {});
         opusStream.pipe(decoder).pipe(passThrough);
 
+        // 💡 inputTypeをRawとして明示
         const resource = createAudioResource(passThrough, { inputType: StreamType.Raw, inlineVolume: false });
         
         const userSpecificReversePlayer = createAudioPlayer();
@@ -309,6 +318,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
 
         reverseMap.set(streamKey, { opusStream, decoder, passThrough, player: userSpecificReversePlayer });
     };
+
     const endHandler = (userId) => {
         if (isOnly && userId !== speakerUserId) return;
         const streamKey = `reverse_${targetSubIndex}_${userId}`;
@@ -326,7 +336,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
             } catch(e){}
             reverseMap.delete(streamKey);
             console.log(`🧹 [ギルド: ${guildId}] 逆方向個別ストリーム解放。`);
-        }, 150);
+        }, 250);
     };
 
     receiver.speaking.on('start', startHandler);
@@ -334,6 +344,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
 
     reverseMap.set(targetSubIndex, { startHandler, endHandler, isOnly, speakerUserId });
 }
+
 
 /**
  * 🌟 逆方向中継を完全に停止・解体する関数
