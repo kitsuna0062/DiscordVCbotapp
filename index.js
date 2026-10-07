@@ -59,7 +59,7 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
     return { player: playersMap.get(idxStr) };
 }
 
-// 🌟 Discordクライアント生成（タイムアウト・再試行設定付き）
+// 🌟 Discordクライアント生成（通信の詰まりを回避する超強力リトライ仕様）
 const createClient = () => new Client({ 
     intents: [
         GatewayIntentBits.Guilds, 
@@ -68,119 +68,14 @@ const createClient = () => new Client({
         GatewayIntentBits.MessageContent
     ],
     rest: {
-        timeout: 30000,
-        retries: 5
+        timeout: 5000,       // 応答を5秒待って来なければ切り替える
+        retries: 10,         // 自動で10回まで再試行して詰まりを突破する
+        globalRequestsPerSecond: 50
     }
 });
 
 const clientMain = createClient();
 const subClients = [];
-
-// 🌟 スラッシュコマンドの定義データ
-const COMMANDS_DATA = [
-    {
-        name: 'setvc',
-        description: 'ボイスチャンネルにボットを入室させ、中継経路を設定します。',
-        options: [
-            {
-                name: 'mainvc',
-                description: '大域Botが入るボイスチャンネルの名前またはID',
-                type: ApplicationCommandOptionType.String,
-                required: true
-            },
-            {
-                name: 'subvc1',
-                description: '聴く係Bot 1が入るボイスチャンネルの名前またはID',
-                type: ApplicationCommandOptionType.String,
-                required: true
-            },
-            {
-                name: 'subvc2',
-                description: '聴く係Bot 2が入るボイスチャンネルの名前またはID（任意）',
-                type: ApplicationCommandOptionType.String,
-                required: false
-            },
-            {
-                name: 'subvc3',
-                description: '聴く係Bot 3が入るボイスチャンネルの名前またはID（任意）',
-                type: ApplicationCommandOptionType.String,
-                required: false
-            }
-        ]
-    },
-    {
-        name: 'connect',
-        description: '前回の履歴（config.json）の設定を引き継いで再接続します。'
-    },
-    {
-        name: 'vcleave',
-        description: 'すべてのボイスチャンネルからボットを退室させます。'
-    },
-    {
-        name: 'vcon',
-        description: 'メインVCから特定のサブVCへの逆方向拡声をオンにします。',
-        options: [
-            {
-                name: 'number',
-                description: '対象 of サブBot番号 (1, 2, ...)',
-                type: ApplicationCommandOptionType.Integer,
-                required: true
-            },
-            {
-                name: 'mode',
-                description: '拡声モード（全員ミキサー or コマンド実行者のみ）',
-                type: ApplicationCommandOptionType.String,
-                required: false,
-                choices: [
-                    { name: '全員ミックス (all)', value: 'all' },
-                    { name: '自分のみ (only)', value: 'only' }
-                ]
-            }
-        ]
-    },
-    {
-        name: 'vcononly',
-        description: '【自分のみ専用】メインVCから特定のサブVCへの逆方向拡声をオンにします。',
-        options: [
-            {
-                name: 'number',
-                description: '対象 of サブBot番号 (1, 2, ...)',
-                type: ApplicationCommandOptionType.Integer,
-                required: true
-            }
-        ]
-    },
-    {
-        name: 'vcoff',
-        description: '指定したサブBotへの逆方向拡声をオフにします。',
-        options: [
-            {
-                name: 'number',
-                description: '対象 of サブBot番号 (1, 2, ...)',
-                type: ApplicationCommandOptionType.Integer,
-                required: true
-            }
-        ]
-    },
-    {
-        name: 'vol',
-        description: '指定した元VC（サブBot）の受信音量を変更します。',
-        options: [
-            {
-                name: 'number',
-                description: '対象 of サブBot番号 (1, 2, ...)',
-                type: ApplicationCommandOptionType.Integer,
-                required: true
-            },
-            {
-                name: 'volume',
-                description: '音量% (0〜300)',
-                type: ApplicationCommandOptionType.Integer,
-                required: true
-            }
-        ]
-    }
-];
 /**
  * 🌟 サブBotからメインBotのプレイヤーへ音声を中継するセットアップ
  */
@@ -253,7 +148,7 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
 }
 
 /**
- * 🌟 逆方向中継：メインBotの声を「サブBotのプレイヤー」へ流し込む（全員ミックス or 特定の人のみ）
+ * 🌟 逆方向中継：メインBotの声を「サブBotのプレイヤー」へ流し込む
  */
 function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUserId, isOnly = false) {
     if (!guildReverseStreams.has(guildId)) guildReverseStreams.set(guildId, new Map());
@@ -295,7 +190,6 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
 
         reverseMap.set(streamKey, { opusStream, decoder, passThrough, player: userSpecificReversePlayer });
     };
-
     const endHandler = (userId) => {
         if (isOnly && userId !== speakerUserId) return;
         const streamKey = `reverse_${targetSubIndex}_${userId}`;
@@ -409,18 +303,10 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
     });
 }
-// 🌟 メインBotの起動＆スラッシュコマンド登録イベント
-clientMain.once('ready', async () => { 
-    console.log(`🚀 司令塔Botが正常に起動しました！`); 
-    
-    // Discordのグローバル環境へスラッシュコマンドを一括デプロイ登録
-    try {
-        console.log('⏳ Discordサーバーへスラッシュコマンドを同期登録中...');
-        await clientMain.application.commands.set(COMMANDS_DATA);
-        console.log('🎉 スラッシュコマンドの登録が完全に完了しました！すべてのサーバーで利用可能です。');
-    } catch (error) {
-        console.error('❌ スラッシュコマンドの登録中にエラーが発生しました:', error);
-    }
+
+// 🌟 メインBotの起動イベント（※フリーズを避けるため、ここにコマンド登録処理は書きません）
+clientMain.once('ready', () => { 
+    console.log(`🚀 司令塔Botが正常に起動しました！いつでもオンラインで待ち受け可能です。`); 
 });
 
 process.on('uncaughtException', (err) => { 
@@ -428,7 +314,6 @@ process.on('uncaughtException', (err) => {
         console.error(' [システム警告]:', err); 
     }
 });
-
 // 🌟 起動メインプロセス
 (async () => {
     try {
@@ -453,6 +338,7 @@ process.on('uncaughtException', (err) => {
             if (!guild) return;
 
             const { commandName, options } = interaction;
+
             // 🎙️ 逆方向拡声オンコマンド (/vcon)
             if (commandName === 'vcon') {
                 const targetIdxNum = options.getInteger('number');
