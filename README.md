@@ -7,7 +7,7 @@ A Discord bot designed to relay and connect multiple voice channels (VCs) seamle
 ## 🔗 Invitation Links
 
 ### Main Bot
-- [Invite Main Bot to your server](hhttps://discord.com/oauth2/authorize?client_id=1554405530024419389&permissions=8&integration_type=0&scope=bot+applications.commands)
+- [Invite Main Bot to your server](https://discord.com/oauth2/authorize?client_id=1554405530024419389&permissions=8&integration_type=0&scope=bot+applications.commands)
 
 ### Secondary Bots
 To relay multiple voice channels, please invite the following secondary bots as well:
