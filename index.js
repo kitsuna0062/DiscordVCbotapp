@@ -133,7 +133,7 @@ const COMMANDS_DATA = [
         options: [
             {
                 name: 'number',
-                description: '対象 of サブBot番号 (1, 2, ...)',
+                description: '対象のサブBot番号 (1, 2, ...)',
                 type: ApplicationCommandOptionType.Integer,
                 required: true
             },
@@ -266,7 +266,6 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
         }, 150);
     });
 }
-
 /**
  * 🌟 逆方向中継：メインBotの声を「サブBotのプレイヤー」へ流し込む
  */
@@ -335,6 +334,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
 
     reverseMap.set(targetSubIndex, { startHandler, endHandler, isOnly, speakerUserId });
 }
+
 /**
  * 🌟 逆方向中継を完全に停止・解体する関数
  */
@@ -365,7 +365,6 @@ function stopReverseVoiceReceiver(guildId, targetSubIndex) {
     }
     console.log(`🔕 [ギルド: ${guildId}] サブBot ${targetSubIndex} への逆方向中継（拡声機能）を完全オフにしました。`);
 }
-
 async function findVoiceChannelForce(guild, target) {
     const channels = await guild.channels.fetch().catch(() => null);
     if (!channels) return null;
@@ -422,6 +421,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
     });
 }
+
 // 🌟 メインBotの起動イベント
 clientMain.once('ready', () => { 
     console.log(`🚀 司令塔Botが正常に起動しました！いつでもオンラインで待ち受け可能です。`); 
@@ -453,24 +453,23 @@ process.on('uncaughtException', (err) => {
             if (!guild) return;
 
             const { commandName, options } = interaction;
-
             // 📊 ステータス確認コマンド (/status)
             if (commandName === 'status') {
                 let statusMsg = `📊 **【中継システム現在状況】**\n`;
                 
                 const connMain = getVoiceConnection(currentGuildId, 'botMain');
                 if (connMain) {
-                    statusMsg += `・📢 大域Bot (Main): 🟢 接続中 (<#\${connMain.joinConfig.channelId}>)\n`;
+                    statusMsg += `・📢 大域Bot (Main): 🟢 接続中 (<#${connMain.joinConfig.channelId}>)\n`;
                 } else {
                     statusMsg += `・📢 大域Bot (Main): 🔴 未接続\n`;
                 }
 
                 for (let i = 0; i < TOKENS.subs.length; i++) {
-                    const connSub = getVoiceConnection(currentGuildId, `botSub_\${i}`);
+                    const connSub = getVoiceConnection(currentGuildId, `botSub_${i}`);
                     if (connSub) {
                         const volMap = guildVolumes.get(currentGuildId);
                         const v = volMap?.get(String(i + 1)) ?? 100;
-                        statusMsg += `` + `・🎧 聴く係Bot ${i + 1}: 🟢 接続中 (<#${connSub.joinConfig.channelId}>) [音量: ${v}%]\n`;
+                        statusMsg += `・🎧 聴く係Bot ${i + 1}: 🟢 接続中 (<#${connSub.joinConfig.channelId}>) [音量: ${v}%]\n`;
                     } else {
                         statusMsg += `・🎧 聴く係Bot ${i + 1}: 🔴 未接続\n`;
                     }
@@ -490,7 +489,7 @@ process.on('uncaughtException', (err) => {
 
                 const connMain = getVoiceConnection(currentGuildId, 'botMain');
                 if (!connMain) {
-                    return interaction.reply({ content: '❌ メインBotがまだVCに参加していません。先に \`/setvc\` を実行してください。', ephemeral: true });
+                    return interaction.reply({ content: '❌ メインBotがまだVCに参加していません。先に `/setvc` を実行してください。', ephemeral: true });
                 }
 
                 const isOnlyMode = (mode === 'only');
@@ -513,7 +512,7 @@ process.on('uncaughtException', (err) => {
 
                 const connMain = getVoiceConnection(currentGuildId, 'botMain');
                 if (!connMain) {
-                    return interaction.reply({ content: '❌ メインBotがまだVCに参加していません。先に \`/setvc\` を実行してください。', ephemeral: true });
+                    return interaction.reply({ content: '❌ メインBotがまだVCに参加していません。先に `/setvc` を実行してください。', ephemeral: true });
                 }
 
                 setupReverseVoiceReceiver(connMain, currentGuildId, targetIdxNum, interaction.user.id, true);
@@ -574,7 +573,7 @@ process.on('uncaughtException', (err) => {
                     const connMain = getVoiceConnection(currentGuildId, 'botMain');
                     if (connMain) { connMain.destroy(); disconnected = true; }
                     for (let i = 0; i < TOKENS.subs.length; i++) {
-                        const connSub = getVoiceConnection(currentGuildId,\`botSub_\${i}\`);
+                        const connSub = getVoiceConnection(currentGuildId, `botSub_${i}`);
                         if (connSub) { connSub.destroy(); disconnected = true; }
                     }
 
@@ -704,7 +703,7 @@ process.on('uncaughtException', (err) => {
                     return interaction.editReply('❌ 再接続エラーが発生しました。'); 
                 }
             }
-        }); // 👈 clientMain.on('interactionCreate') の閉じ
+        }); // clientMain.on('interactionCreate') の閉じ
 
         // 🌟 メインBotのログイン完了後に、5秒おきにサブBotを安全にログインさせます
         for (let i = 0; i < TOKENS.subs.length; i++) {
@@ -725,4 +724,4 @@ process.on('uncaughtException', (err) => {
     } catch (err) { 
         console.error('❌ ログイン接続エラー:', err); 
     }
-})(); // 👈 起動メインプロセス(async () => {}) の閉じ
+})(); // 起動メインプロセス(async () => {}) の閉じ
