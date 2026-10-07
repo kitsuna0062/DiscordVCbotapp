@@ -291,8 +291,9 @@ clientMain.on('messageCreate', async (message) => {
     const guild = clientMain.guilds.cache.get(currentGuildId);
     if (!guild) return;
 
+    // 💡 メッセージを半角スペースで区切り、配列（args）にする
     const args = message.content.trim().split(/ +/);
-    const command = args[0]; 
+    const command = args[0]; // 🌟 1番最初の単語文字列（/setvc や /vcoff など）を正しく抽出
 
     // 🔕 逆方向拡声オフコマンド (/vcoff)
     if (command === '/vcoff') {
