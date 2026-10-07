@@ -676,6 +676,11 @@ process.on('uncaughtException', (err) => {
         }
 
         console.log('🔗 司令塔Bot (Main) に接続中...');
+        console.log('【デバッグ】メインのトークンが読めているか:', TOKENS.botMain ? 'YES (文字数: ' + TOKENS.botMain.length + ')' : 'NO (空っぽです)');
+        console.log('【デバッグ】認識したサブBotの台数:', TOKENS.subs.length, '台');
+
+        await clientMain.login(TOKENS.botMain);
+        console.log('✅ 司令塔Bot (Main) オンライン。5秒後にサブBotの順次起動を開始します...');
         await clientMain.login(TOKENS.botMain);
         console.log('✅ 司令塔Bot (Main) オンライン。5秒後にサブBotの順次起動を開始します...');
 
