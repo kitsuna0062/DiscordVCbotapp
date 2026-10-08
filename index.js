@@ -356,49 +356,54 @@ process.on('uncaughtException', (err) => {
 
             // 接続・中継開始コマンド (/setvc)
             if (commandName === 'setvc') {
-                // 💡 【最重要修正】3秒ルール回避のため、一切の処理（変数取得など）より前に即座に返信保留を送信する
+                // 💡 【超重要修正】何よりも、変数定義すら行う前に、1ミリ秒でも早くDiscordに応答を返す
                 try {
                     await interaction.deferReply();
                 } catch (e) {
-                    console.error("deferReplyに失敗しました。Discordのレスポンスが遅延しています:", e);
+                    console.error("⚠️ Discordへの初期応答(deferReply)が3秒以内に間に合いませんでした。RenderのCPU割り当てが詰まっています:", e);
                     return;
                 }
 
-                const mainChannelRaw = options.getChannel('main_vc');
-                const channelMain = guild.channels.cache.get(mainChannelRaw?.id);
+                // 💡 重いボイスチャンネル接続やファイルI/O処理を別キューに逃がし、レスポンス送信を最優先で確定させる
+                setImmediate(async () => {
+                    try {
+                        const mainChannelRaw = options.getChannel('main_vc');
+                        const channelMain = guild.channels.cache.get(mainChannelRaw?.id);
 
-                const subChannelIds = [
-                    options.getChannel('sub_vc_1')?.id,
-                    options.getChannel('sub_vc_2')?.id,
-                    options.getChannel('sub_vc_3')?.id
-                ].filter(Boolean);
+                        const subChannelIds = [
+                            options.getChannel('sub_vc_1')?.id,
+                            options.getChannel('sub_vc_2')?.id,
+                            options.getChannel('sub_vc_3')?.id
+                        ].filter(Boolean);
 
-                const sourceChannels = subChannelIds.map(id => guild.channels.cache.get(id)).filter(Boolean);
+                        const sourceChannels = subChannelIds.map(id => guild.channels.cache.get(id)).filter(Boolean);
 
-                if (!channelMain || sourceChannels.length === 0) {
-                    return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。').catch(() => {});
-                }
+                        if (!channelMain || sourceChannels.length === 0) {
+                            return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。').catch(() => {});
+                        }
 
-                try {
-                    // 重いVC一括接続・中継セットアップを実行
-                    connectToVCs(currentGuildId, channelMain, sourceChannels);
-                    
-                    let configData = {};
-                    if (fs.existsSync(CONFIG_FILE)) { try { configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch(e){} }
-                    configData[currentGuildId] = { mainId: channelMain.id, sourceIds: sourceChannels.map(c => c.id), volumes: configData[currentGuildId]?.volumes || {} };
-                    fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
+                        // ボイスチャンネルへの接続を開始（この処理が重いため後ろに逃がしました）
+                        connectToVCs(currentGuildId, channelMain, sourceChannels);
+                        
+                        let configData = {};
+                        if (fs.existsSync(CONFIG_FILE)) { try { configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch(e){} }
+                        configData[currentGuildId] = { mainId: channelMain.id, sourceIds: sourceChannels.map(c => c.id), volumes: configData[currentGuildId]?.volumes || {} };
+                        fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
 
-                    let vcDetailMsg = `📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
-                    sourceChannels.forEach((ch, idx) => {
-                        const v = guildVolumes.get(currentGuildId)?.get(String(idx + 1)) ?? 100;
-                        vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
-                    });
-                    return interaction.editReply(`🔊 中継接続ラインを開通しました！\n\n${vcDetailMsg}`).catch(() => {});
-                } catch (error) { 
-                    console.error(error); 
-                    return interaction.editReply('❌ 接続エラーが発生しました。').catch(() => {}); 
-                }
+                        let vcDetailMsg = `📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
+                        sourceChannels.forEach((ch, idx) => {
+                            const v = guildVolumes.get(currentGuildId)?.get(String(idx + 1)) ?? 100;
+                            vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
+                        });
+                        
+                        await interaction.editReply(`🔊 中継接続ラインを開通しました！\n\n${vcDetailMsg}`).catch(() => {});
+                    } catch (error) { 
+                        console.error("セットアップ中にエラーが発生しました:", error); 
+                        await interaction.editReply('❌ 接続エラーが発生しました。').catch(() => {}); 
+                    }
+                });
             }
+
 
             // 🎙️ vcon
             if (commandName === 'vcon') {
