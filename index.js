@@ -356,15 +356,13 @@ process.on('uncaughtException', (err) => {
 
             // 接続・中継開始コマンド (/setvc)
             if (commandName === 'setvc') {
-                // 💡 【超重要修正】何よりも、変数定義すら行う前に、1ミリ秒でも早くDiscordに応答を返す
                 try {
                     await interaction.deferReply();
                 } catch (e) {
-                    console.error("⚠️ Discordへの初期応答(deferReply)が3秒以内に間に合いませんでした。RenderのCPU割り当てが詰まっています:", e);
+                    console.error("⚠️ タイムアウト回避失敗:", e);
                     return;
                 }
 
-                // 💡 重いボイスチャンネル接続やファイルI/O処理を別キューに逃がし、レスポンス送信を最優先で確定させる
                 setImmediate(async () => {
                     try {
                         const mainChannelRaw = options.getChannel('main_vc');
@@ -382,7 +380,6 @@ process.on('uncaughtException', (err) => {
                             return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。').catch(() => {});
                         }
 
-                        // ボイスチャンネルへの接続を開始（この処理が重いため後ろに逃がしました）
                         connectToVCs(currentGuildId, channelMain, sourceChannels);
                         
                         let configData = {};
@@ -398,14 +395,15 @@ process.on('uncaughtException', (err) => {
                         
                         await interaction.editReply(`🔊 中継接続ラインを開通しました！\n\n${vcDetailMsg}`).catch(() => {});
                     } catch (error) { 
-                        console.error("セットアップ中にエラーが発生しました:", error); 
+                        console.error("セットアップエラー:", error); 
                         await interaction.editReply('❌ 接続エラーが発生しました。').catch(() => {}); 
                     }
                 });
             }
 
 
-            // 🎙️ vcon
+
+                        // 🎙️ vcon
             if (commandName === 'vcon') {
                 const targetIdxNum = options.getInteger('number');
                 const mode = options.getString('mode') || 'all';
@@ -456,7 +454,9 @@ process.on('uncaughtException', (err) => {
                 if (connMain) connMain.destroy();
                 for (let i = 0; i < TOKENS.subs.length; i++) {
                     const connSub = getVoiceConnection(currentGuildId, `botSub_${i}`);
-                    if (connSub) connSub.destroy();
+                    if (connSub) {
+                        try { connSub.destroy(); } catch(e){}
+                    }
                 }
                 return interaction.reply('👋 すべてのVCから退出しました。');
             }
@@ -479,14 +479,25 @@ process.on('uncaughtException', (err) => {
             }
         }); // clientMain.on('interactionCreate') の閉じ
 
-        for (let i = 0; i < TOKENS.subs.length; i++) {
-            await new Promise(r => setTimeout(r, 5000));
-            const subClient = createClient();
-            subClient.once('ready', () => { 
-                console.log(`✅ 聴く係Bot_${i + 1} オンライン。`); 
-                subClients.push(subClient);
-            });
-            await subClient.login(TOKENS.subs[i]).catch(console.error);
-        }
+        // 💡 【超重要修正】サブBotのログイン処理を完全にバックグラウンド化し、メインスレッドを1ミリ秒もブロックしない形に変更
+        (async () => {
+            for (let i = 0; i < TOKENS.subs.length; i++) {
+                // 5秒の待機も非同期のバックグラウンドタスクとして逃がす
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                
+                const subClient = createClient();
+                subClient.once('ready', () => { 
+                    console.log(`✅ 聴く係Bot_${i + 1} オンライン。`); 
+                    subClients.push(subClient);
+                });
+                
+                // ログインエラーが起きてもメインスレッドを巻き添えにしないよう完全に隔離
+                subClient.login(TOKENS.subs[i]).catch(err => {
+                    console.error(`❌ 聴く係Bot_${i + 1} のログインに失敗しました:`, err);
+                });
+            }
+        })();
+
     } catch (err) { console.error('❌ 接続エラー:', err); }
 })();
+
