@@ -1,5 +1,5 @@
 process.env.NODE_NO_WARNINGS = '1';
-const { Client, GatewayIntentBits, ChannelType, ApplicationCommandOptionType } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, StreamType, getVoiceConnection, VoiceConnectionStatus, EndBehaviorType } = require('@discordjs/voice');
 const prism = require('prism-media');
 const fs = require('fs');
@@ -32,6 +32,7 @@ const TOKENS = {
 };
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
+const PREFIX = '!'; // 💡 メッセージコマンド用のプレフィックス
 
 const guildPlayers = new Map();       
 const guildVolumes = new Map();       
@@ -55,60 +56,19 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
     return { player: playersMap.get(idxStr) };
 }
 
+// 💡 メッセージ（!コマンド）を読み取るため、MessageContentインテントを追加
 const createClient = () => new Client({ 
     intents: [
         GatewayIntentBits.Guilds, 
         GatewayIntentBits.GuildVoiceStates, 
         GatewayIntentBits.GuildMessages, 
-        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.MessageContent, // 👈 ユーザーの「!コマンド」を読み取るために必須
         GatewayIntentBits.GuildMembers
     ]
 });
 
 const clientMain = createClient();
-const subClients = []; // 💡 ログイン完了したサブBotのインスタンスが動的に格納される
-const COMMANDS_DATA = [
-    {
-        name: 'setvc',
-        description: 'ボイスチャンネルにボットを入室させ、中継経路を設定します。',
-        options: [
-            { name: 'main_vc', description: '大域Botが入るボイスチャンネルを選択してください', type: ApplicationCommandOptionType.Channel, channelTypes: [ChannelType.GuildVoice], required: true },
-            { name: 'sub_vc_1', description: '聴く係Bot 1が入るボイスチャンネルを選択してください', type: ApplicationCommandOptionType.Channel, channelTypes: [ChannelType.GuildVoice], required: true },
-            { name: 'sub_vc_2', description: '聴く係Bot 2が入るボイスチャンネルを選択してください（任意）', type: ApplicationCommandOptionType.Channel, channelTypes: [ChannelType.GuildVoice], required: false },
-            { name: 'sub_vc_3', description: '聴く係Bot 3が入るボイスチャンネルを選択してください（任意）', type: ApplicationCommandOptionType.Channel, channelTypes: [ChannelType.GuildVoice], required: false }
-        ]
-    },
-    { name: 'connect', description: '前回の履歴（config.json）の設定を引き継いで再接続します。' },
-    { name: 'vcleave', description: 'すべてのボイスチャンネルからボットを退室させます。' },
-    {
-        name: 'vcon',
-        description: 'メインVCから特定のサブVCへの逆方向拡声をオンにします。',
-        options: [
-            { name: 'number', description: '対象のサブBot番号 (1, 2, ...)', type: ApplicationCommandOptionType.Integer, required: true },
-            {
-                name: 'mode',
-                description: '拡声モード（全員ミキサー or コマンド実行者のみ）',
-                type: ApplicationCommandOptionType.String,
-                required: false,
-                choices: [
-                    { name: '全員ミックス (all)', value: 'all' },
-                    { name: '自分のみ (only)', value: 'only' }
-                ]
-            }
-        ]
-    },
-    { name: 'vcononly', description: '【自分のみ専用】メインVCから特定のサブVCへの逆方向拡声をオンにします。', options: [ { name: 'number', description: '対象のサブBot番号 (1, 2, ...)', type: ApplicationCommandOptionType.Integer, required: true } ] },
-    { name: 'vcoff', description: '指定したサブBotへの逆方向拡声をオフにします。', options: [ { name: 'number', description: '対象のサブBot番号 (1, 2, ...)', type: ApplicationCommandOptionType.Integer, required: true } ] },
-    {
-        name: 'vol',
-        description: '指定した元VC（サブBot）の受信音量を変更します。',
-        options: [
-            { name: 'number', description: '対象のサブBot番号 (1, 2, ...)', type: ApplicationCommandOptionType.Integer, required: true },
-            { name: 'volume', description: '音量% (0〜300)', type: ApplicationCommandOptionType.Integer, required: true }
-        ]
-    },
-    { name: 'status', description: '現在の中継接続ステータスとBotの稼働状況を表示します。' }
-];
+const subClients = []; 
 function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex, mainConnection) {
     const receiver = connection.receiver;
     const activeStreams = guildActiveStreams.get(guildId);
@@ -231,13 +191,12 @@ function stopReverseVoiceReceiver(guildId, targetSubIndex) {
                 if (streamData.player) streamData.player.stop(true);
                 streamData.decoder.unpipe(streamData.passThrough);
                 streamData.opusStream.unpipe(streamData.decoder);
-                streamData.passThrough.destroy(); streamData.decoder.destroy(); streamData.opusStream.destroy();
+                passThrough.destroy(); streamData.decoder.destroy(); streamData.opusStream.destroy();
             } catch(e){}
             reverseMap.delete(key);
         }
     }
 }
-
 function connectToVCs(guildId, mainChannel, sourceChannels) {
     try { getVoiceConnection(guildId, 'botMain')?.destroy(); } catch(e){}
     sourceChannels.forEach((_, index) => { try { getVoiceConnection(guildId, `botSub_${index}`)?.destroy(); } catch(e){} });
@@ -273,12 +232,9 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
     });
 }
+
 clientMain.once('ready', async () => { 
-    console.log(`🚀 司令塔Bot (Main) が正常に起動しました！無料プラン最適化モード稼働中。`); 
-    try {
-        await clientMain.application.commands.set(COMMANDS_DATA);
-        console.log('✅ スラッシュコマンド登録完了！');
-    } catch (error) { console.error('❌ コマンド登録エラー:', error); }
+    console.log(`🚀 司令塔Bot (Main) がテキストコマンドモードで正常に起動しました！`); 
 });
 
 process.on('uncaughtException', (err) => { 
@@ -290,17 +246,18 @@ process.on('uncaughtException', (err) => {
         if (!TOKENS.botMain || TOKENS.subs.length === 0) return console.error('❌ 環境変数が空です。'); 
         await clientMain.login(TOKENS.botMain);
 
-        clientMain.on('interactionCreate', async (interaction) => {
-            if (!interaction.isChatInputCommand()) return;
+        // 🌟 メッセージ受信イベント（テキストコマンド判定）
+        clientMain.on('messageCreate', async (message) => {
+            if (message.author.bot || !message.content.startsWith(PREFIX)) return;
 
-            const currentGuildId = interaction.guildId;
-            const guild = clientMain.guilds.cache.get(currentGuildId);
+            const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+            const command = args.shift().toLowerCase();
+            const currentGuildId = message.guildId;
+            const guild = message.guild;
             if (!guild) return;
 
-            const { commandName, options } = interaction;
-
-            // 📊 status
-            if (commandName === 'status') {
+            // 📊 !status コマンド
+            if (command === 'status') {
                 let statusMsg = `📊 **【中継システム現在状況】**\n`;
                 const connMain = getVoiceConnection(currentGuildId, 'botMain');
                 statusMsg += connMain ? `・📢 大域Bot (Main): 🟢 接続中 (<#${connMain.joinConfig.channelId}>)\n` : `・📢 大域Bot (Main): 🔴 未接続\n`;
@@ -309,146 +266,207 @@ process.on('uncaughtException', (err) => {
                     const connSub = getVoiceConnection(currentGuildId, `botSub_${i}`);
                     if (connSub) {
                         const v = guildVolumes.get(currentGuildId)?.get(String(i + 1)) ?? 100;
-                        statusMsg += `=・🎧 聴く係Bot ${i + 1}: 🟢 接続中 (<#${connSub.joinConfig.channelId}>) [音量: ${v}%]\n`;
+                        statusMsg += `・🎧 聴く係Bot ${i + 1}: 🟢 接続中 (<#${connSub.joinConfig.channelId}>) [音量: ${v}%]\n`;
                     } else {
                         statusMsg += `・🎧 聴く係Bot ${i + 1}: 🔴 未接続\n`;
                     }
                 }
-                return interaction.reply({ content: statusMsg }).catch(() => {});
+                return message.reply(statusMsg).catch(() => {});
             }
 
-            // 接続・中継開始コマンド (/setvc)
-            if (commandName === 'setvc') {
-                // 💡 【核心の修正】Renderの復帰遅延による3秒超過を想定し、通常のreplyをスキップして即座に非同期処理をスケジュール
-                setImmediate(async () => {
-                    let statusNotice = null;
-                    try {
-                        // 制限時間のないWebhook経由で、現在の進捗をチャンネルへテキスト送信
-                        statusNotice = await interaction.channel.send('⏳ Renderサーバーが応答しました。接続中継ラインを検出中。サブBot群の起動を開始します...');
-                    } catch (e) { console.error("通知の送信に失敗しました:", e); }
+            // 🔊 !setvc コマンド [フォーマット: !setvc VC名1 VC名2...]
+            if (command === 'setvc') {
+                if (args.length < 2) {
+                    return message.reply('❌ 使用方法: `!setvc [メインVC名] [サブVC名1] [サブVC名2]...`').catch(() => {});
+                }
 
-                    try {
-                        const mainChannelRaw = options.getChannel('main_vc');
-                        const channelMain = guild.channels.cache.get(mainChannelRaw?.id);
+                const statusNotice = await message.reply('⏳ ボイスチャンネルを探索中... サブBot群の初期化を開始します。').catch(() => null);
 
-                        const subChannelIds = [
-                            options.getChannel('sub_vc_1')?.id,
-                            options.getChannel('sub_vc_2')?.id,
-                            options.getChannel('sub_vc_3')?.id
-                        ].filter(Boolean);
-
-                        const sourceChannels = subChannelIds.map(id => guild.channels.cache.get(id)).filter(Boolean);
-
-                        if (!channelMain || sourceChannels.length === 0) {
-                            if (statusNotice) statusNotice.edit('❌ 指定されたボイスチャンネルが正しく選択されていません。').catch(() => {});
-                            return;
-                        }
-
-                        // サブBotを順番にバックグラウンドログイン
-                        for (let i = 0; i < sourceChannels.length; i++) {
-                            if (!subClients[i]) {
-                                if (statusNotice) statusNotice.edit(`🔗 聴く係Bot_${i + 1} を初期化中（サーバー復帰後のセットアップ）...`).catch(() => {});
-                                const subClient = createClient();
-                                await new Promise((resolve, reject) => {
-                                    subClient.once('ready', () => {
-                                        subClients[i] = subClient;
-                                        resolve();
-                                    });
-                                    subClient.login(TOKENS.subs[i]).catch(reject);
-                                });
-                            }
-                        }
-
-                        if (statusNotice) statusNotice.edit('🔊 ボイスチャンネルへの一括接続ラインを開通しています...').catch(() => {});
-
-                        // ボイスチャンネルへの一括接続処理
-                        connectToVCs(currentGuildId, channelMain, sourceChannels);
-                        
-                        let configData = {};
-                        if (fs.existsSync(CONFIG_FILE)) { try { configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch(e){} }
-                        configData[currentGuildId] = { mainId: channelMain.id, sourceIds: sourceChannels.map(c => c.id), volumes: configData[currentGuildId]?.volumes || {} };
-                        fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
-
-                        let vcDetailMsg = `📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
-                        sourceChannels.forEach((ch, idx) => {
-                            const v = guildVolumes.get(currentGuildId)?.get(String(idx + 1)) ?? 100;
-                            vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
-                        });
-                        
-                        // すべての中継セットアップが完了したら、メッセージを完了に更新
-                        if (statusNotice) {
-                            await statusNotice.edit(`✅ **中継接続ラインを開通しました！**\n\n${vcDetailMsg}`).catch(() => {});
-                        }
-                    } catch (error) { 
-                        console.error("セットアップエラー:", error); 
-                        if (statusNotice) statusNotice.edit('❌ ボットの一括初期化、またはVC接続中にエラーが発生しました。').catch(() => {});
+                try {
+                    // キャッシュを最新にするため、一度ギルド内のすべてのチャンネル情報を強制取得
+                    const channels = await guild.channels.fetch().catch(() => null);
+                    if (!channels) {
+                        if (statusNotice) statusNotice.edit('❌ サーバーのチャンネル一覧の取得に失敗しました。').catch(() => {});
+                        return;
                     }
-                });
+
+                    // 引数の文字列（チャンネル名、またはID）から対応するボイスチャンネルを特定
+                    const findVoiceChannel = (targetStr) => {
+                        return channels.find(c => c && (c.id === targetStr || c.name === targetStr) && (c.type === ChannelType.GuildVoice || c.isVoiceBased()));
+                    };
+
+                    const mainVCName = args[0];
+                    const subVCNames = args.slice(1);
+
+                    const channelMain = findVoiceChannel(mainVCName);
+                    const sourceChannels = subVCNames.map(name => findVoiceChannel(name)).filter(Boolean);
+
+                    if (!channelMain || sourceChannels.length === 0) {
+                        if (statusNotice) statusNotice.edit('❌ 指定された名前のボイスチャンネルが見つかりません。名前が完全に一致しているか確認してください。').catch(() => {});
+                        return;
+                    }
+
+                    if (sourceChannels.length > TOKENS.subs.length) {
+                        if (statusNotice) statusNotice.edit(`❌ 用意されているサブBotの数（最大 ${TOKENS.subs.length} 台）を超えています。`).catch(() => {});
+                        return;
+                    }
+
+                    // 💡 選ばれたサブBotの数だけ、その場で初めてオンデマンドにバックグラウンドログインさせる
+                    for (let i = 0; i < sourceChannels.length; i++) {
+                        if (!subClients[i]) {
+                            if (statusNotice) statusNotice.edit(`🔗 聴く係Bot_${i + 1} をオンデマンドログイン中...`).catch(() => {});
+                            const subClient = createClient();
+                            await new Promise((resolve, reject) => {
+                                subClient.once('ready', () => { subClients[i] = subClient; resolve(); });
+                                subClient.login(TOKENS.subs[i]).catch(reject);
+                            });
+                        }
+                    }
+
+                    if (statusNotice) statusNotice.edit('🔊 ボイスチャンネルへの一括接続ラインを開通しています...').catch(() => {});
+
+                    // ボイスチャンネルへ一括接続
+                    connectToVCs(currentGuildId, channelMain, sourceChannels);
+                    
+                    let configData = {};
+                    if (fs.existsSync(CONFIG_FILE)) { try { configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch(e){} }
+                    configData[currentGuildId] = { mainId: channelMain.id, sourceIds: sourceChannels.map(c => c.id), volumes: configData[currentGuildId]?.volumes || {} };
+                    fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
+
+                    let vcDetailMsg = `📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
+                    sourceChannels.forEach((ch, idx) => {
+                        const v = guildVolumes.get(currentGuildId)?.get(String(idx + 1)) ?? 100;
+                        vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
+                    });
+                    
+                    if (statusNotice) statusNotice.edit(`✅ **中継接続ラインを開通しました！**\n\n${vcDetailMsg}`).catch(() => {});
+                } catch (error) { 
+                    console.error("セットアップエラー:", error); 
+                    if (statusNotice) statusNotice.edit('❌ ボットの一括初期化、またはVC接続中にエラーが発生しました。').catch(() => {});
+                }
+            }
+            // 🎙️ !vcon コマンド [フォーマット: !vcon 番号 モード(任意)]
+            if (command === 'vcon') {
+                const targetIdxNum = parseInt(args[0], 10);
+                const mode = args[1] || 'all';
+
+                if (isNaN(targetIdxNum) || targetIdxNum < 1) {
+                    return message.reply('❌ 使用方法: `!vcon [サブBot番号(1, 2...)] [all または only (任意)]`').catch(() => {});
+                }
+
+                const connMain = getVoiceConnection(currentGuildId, 'botMain');
+                if (!connMain) return message.reply('❌ メインBotがまだVCに参加していません。先に `!setvc` を実行してください。').catch(() => {});
+
+                setupReverseVoiceReceiver(connMain, currentGuildId, targetIdxNum, message.author.id, (mode === 'only'));
+                return message.reply(`🎙️ サブBot ${targetIdxNum} への逆方向拡声を開始しました。(${mode === 'only' ? '自分のみ専用モード' : '全員ミキサーモード'})`).catch(() => {});
             }
 
-            // 🎙️ vcon
-            if (commandName === 'vcon') {
-                const targetIdxNum = options.getInteger('number');
-                const mode = options.getString('mode') || 'all';
+            // 🎙️ !vcononly コマンド [フォーマット: !vcononly 番号]
+            if (command === 'vcononly') {
+                const targetIdxNum = parseInt(args[0], 10);
+
+                if (isNaN(targetIdxNum) || targetIdxNum < 1) {
+                    return message.reply('❌ 使用方法: `!vcononly [サブBot番号(1, 2...)]`').catch(() => {});
+                }
+
                 const connMain = getVoiceConnection(currentGuildId, 'botMain');
-                if (!connMain) return interaction.reply({ content: '❌ メインBotが未参加です。先に `/setvc` を実行してください。', ephemeral: true });
-                setupReverseVoiceReceiver(connMain, currentGuildId, targetIdxNum, interaction.user.id, (mode === 'only'));
-                return interaction.reply(`🎙️ サブBot ${targetIdxNum} への逆方向拡声を開始しました。`);
+                if (!connMain) return message.reply('❌ メインBotがまだVCに参加していません。').catch(() => {});
+
+                setupReverseVoiceReceiver(connMain, currentGuildId, targetIdxNum, message.author.id, true);
+                return message.reply(`🎙️ 【自分のみ専用】サブBot ${targetIdxNum} への逆方向拡声を開始しました。`).catch(() => {});
             }
-            
-            // 🎙️ vcononly
-            if (commandName === 'vcononly') {
-                const targetIdxNum = options.getInteger('number');
-                const connMain = getVoiceConnection(currentGuildId, 'botMain');
-                if (!connMain) return interaction.reply({ content: '❌ メインBotが未参加です。', ephemeral: true });
-                setupReverseVoiceReceiver(connMain, currentGuildId, targetIdxNum, interaction.user.id, true);
-                return interaction.reply(`🎙️ 【自分のみ】サブBot ${targetIdxNum} への拡声を開始しました。`);
-            }
-            
-            // 🔕 vcoff
-            if (commandName === 'vcoff') {
-                const targetIdxNum = options.getInteger('number');
+
+            // 🔕 !vcoff コマンド [フォーマット: !vcoff 番号]
+            if (command === 'vcoff') {
+                const targetIdxNum = parseInt(args[0], 10);
+
+                if (isNaN(targetIdxNum) || targetIdxNum < 1) {
+                    return message.reply('❌ 使用方法: `!vcoff [サブBot番号(1, 2...)]`').catch(() => {});
+                }
+
                 stopReverseVoiceReceiver(currentGuildId, targetIdxNum);
-                return interaction.reply(`🔕 サブBot ${targetIdxNum} への逆方向拡声をオフにしました。`);
+                return message.reply(`🔕 サブBot ${targetIdxNum} への逆方向拡声をオフにしました。`).catch(() => {});
             }
-            
-            // 🎵 vol
-            if (commandName === 'vol') {
-                const targetIdxNum = options.getInteger('number');
-                const value = options.getInteger('volume');
+
+            // 🎵 !vol コマンド [フォーマット: !vol 番号 音量%]
+            if (command === 'vol') {
+                const targetIdxNum = parseInt(args[0], 10);
+                const value = parseInt(args[1], 10);
+
+                if (isNaN(targetIdxNum) || targetIdxNum < 1 || isNaN(value) || value < 0 || value > 300) {
+                    return message.reply('❌ 使用方法: `!vol [サブBot番号] [音量(0〜300)]`').catch(() => {});
+                }
+
                 if (!guildVolumes.has(currentGuildId)) guildVolumes.set(currentGuildId, new Map());
                 guildVolumes.get(currentGuildId).set(String(targetIdxNum), value);
+
                 const activeStreams = guildActiveStreams.get(currentGuildId);
                 if (activeStreams) {
                     for (const [key, streamData] of activeStreams.entries()) {
                         if (key.startsWith(`${targetIdxNum}_`)) streamData.resource.volume.setVolume(value / 100);
                     }
                 }
-                return interaction.reply(`🔊 元VC ${targetIdxNum} の音量を ${value}% に変更しました。`);
+
+                try {
+                    let configData = {};
+                    if (fs.existsSync(CONFIG_FILE)) configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+                    if (!configData[currentGuildId]) configData[currentGuildId] = {};
+                    if (!configData[currentGuildId].volumes) configData[currentGuildId].volumes = {};
+                    configData[currentGuildId].volumes[targetIdxNum] = value;
+                    fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
+                } catch (e) { console.error(e); }
+
+                return message.reply(`🔊 元VC ${targetIdxNum} の音量を ${value}% に変更しました。`).catch(() => {});
             }
-            
-            // 🚪 vcleave
-            if (commandName === 'vcleave') {
+            // 🚪 !vcleave コマンド
+            if (command === 'vcleave') {
                 const connMain = getVoiceConnection(currentGuildId, 'botMain');
                 if (connMain) connMain.destroy();
                 for (let i = 0; i < TOKENS.subs.length; i++) {
                     const connSub = getVoiceConnection(currentGuildId, `botSub_${i}`);
                     if (connSub) { try { connSub.destroy(); } catch(e){} }
                 }
-                return interaction.reply('👋 すべてのVCから退出しました。');
+                return message.reply('👋 すべてのボイスチャンネルから退出しました。').catch(() => {});
             }
-            
-            // ♻️ connect
-            if (commandName === 'connect') {
-                if (!fs.existsSync(CONFIG_FILE)) return interaction.reply({ content: '❌ 接続履歴がありません。', ephemeral: true });
-                await interaction.deferReply();
+
+            // ♻️ !connect コマンド（前回履歴からの再接続）
+            if (command === 'connect') {
+                if (!fs.existsSync(CONFIG_FILE)) return message.reply('❌ 接続履歴がありません。').catch(() => {});
+                
+                const statusNotice = await message.reply('♻️ 前回の設定・音量をロードして中継の再開を準備中...').catch(() => null);
+
                 try {
                     const configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
                     const guildConfig = configData[currentGuildId];
-                    if (!guildConfig) return interaction.editReply('❌ 履歴がありません。');
-                    const channelMain = guild.channels.cache.get(guildConfig.mainId);
-                    const sourceChannels = guildConfig.sourceIds.map(id => guild.channels.cache.get(id)).filter(Boolean);
+                    if (!guildConfig) {
+                        if (statusNotice) statusNotice.edit('❌ このサーバーでの接続履歴がありません。').catch(() => {});
+                        return;
+                    }
+
+                    const channels = await guild.channels.fetch().catch(() => null);
+                    if (!channels) {
+                        if (statusNotice) statusNotice.edit('❌ チャンネル情報の取得に失敗しました。').catch(() => {});
+                        return;
+                    }
+
+                    const channelMain = channels.get(guildConfig.mainId);
+                    const sourceChannels = guildConfig.sourceIds.map(id => channels.get(id)).filter(Boolean);
                     
+                    if (!channelMain || sourceChannels.length === 0) {
+                        if (statusNotice) statusNotice.edit('❌ 履歴にあるチャンネルが見つかりません。削除された可能性があります。').catch(() => {});
+                        return;
+                    }
+
+                    if (!guildVolumes.has(currentGuildId)) guildVolumes.set(currentGuildId, new Map());
+                    const volMap = guildVolumes.get(currentGuildId);
+
+                    if (guildConfig.volumes) { 
+                        Object.keys(guildConfig.volumes).forEach(idx => { 
+                            volMap.set(String(idx), guildConfig.volumes[idx]); 
+                        }); 
+                    }
+
+                    // サブBotが未初期化の場合はオンデマンドログイン
                     for (let i = 0; i < sourceChannels.length; i++) {
                         if (!subClients[i]) {
                             const subClient = createClient();
@@ -458,10 +476,21 @@ process.on('uncaughtException', (err) => {
                             });
                         }
                     }
+
                     connectToVCs(currentGuildId, channelMain, sourceChannels);
-                    return interaction.editReply(`♻️ 前回の設定で再接続しました！`);
-                } catch (e) { return interaction.editReply('❌ 再接続エラー。'); }
+
+                    let vcDetailMsg = `📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
+                    sourceChannels.forEach((ch, idx) => {
+                        const v = volMap.get(String(idx + 1)) ?? 100;
+                        vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
+                    });
+
+                    if (statusNotice) statusNotice.edit(`♻️ 前回の設定・音量をロードして中継を再開しました！\n\n${vcDetailMsg}`).catch(() => {});
+                } catch (e) { 
+                    console.error(e);
+                    if (statusNotice) statusNotice.edit('❌ 再接続エラーが発生しました。').catch(() => {});
+                }
             }
-        });
+        }); // clientMain.on('messageCreate') の閉じ
     } catch (err) { console.error('❌ 接続エラー:', err); }
 })();
