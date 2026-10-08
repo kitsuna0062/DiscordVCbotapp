@@ -18,18 +18,19 @@ To relay multiple voice channels, please invite the following secondary bots as 
 
 ## 💬 Commands
 
-> 💡 The list of commands can also be found in the Main Bot's profile description.
+Commands are text commands using `!` by default (not slash commands). Set `COMMAND_PREFIX` in Render to use another prefix. The bot requires the **Message Content Intent** to be enabled in the Discord Developer Portal.
+
+For Render, configure `DISCORD_TOKEN_MAIN` and at least one secondary token (`DISCORD_TOKEN_A` through `DISCORD_TOKEN_E`) as environment variables. Invite the matching bot accounts to the server and grant them permission to view, connect to, and speak in the selected voice channels.
 
 | Command | Description |
 | :--- | :--- |
-| `/setvc [IDorName] [IDorName]...` | **Enter Room (Initial Setup)**<br>• 1st argument: The global VC ID or name.<br>• Subsequent arguments: The VC IDs or names for the relay path, in order. |
-| `/connect` | **Connect with Previous Settings**<br>Makes the bot enter the room while carrying over the settings from the last `/setvc` command. |
-| `/vcleave` | **Leave Room**<br>Disconnects the bot from the voice channels. |
-| `/vcon [number] {only}` | **Enable Speaking to Specific Channel**<br>Allows you to speak to an individual voice channel from the main voice channel.<br>※ The channel numbers correspond to the order in which the sub-bots were invited using `/setvc`.<br>※ Adding `only` restricts speaking privileges exclusively to the user who executed the command. |
-| `/vcononly [number]` | Same as `/vcon [number] only`. |
-| `/vcoff [number]` | Disables voice chat for channels where it was previously enabled via `/vcon`. |
-| `/vol [number] [volume]` | **Volume Adjustments**<br>Sets the microphone input level for each sub-bot.<br>※ Adjustable range: `0%` to `300%` |
-|`/status`|**Show Status**<br>Displays details.|
+| `!setvc [main VC] [source VC 1] [source VC 2]...` | Join the specified main and source voice channels. Use channel names or IDs. |
+| `!connect` | Reconnect using the saved channel configuration. |
+| `!vcleave` | Disconnect all bots from voice channels. |
+| `!vcon [number] [only]` | Relay audio from the main VC to the numbered source VC. Add `only` to relay only the command author's audio. |
+| `!vcononly [number]` | Same as `!vcon [number] only`. |
+| `!vcoff [number]` | Stop relaying audio to the numbered source VC. |
+| `!vol [number] [volume]` | Set the source bot's relay volume from `0` to `300` percent. |
 
 # DiscordVCbot
 
@@ -51,15 +52,16 @@ Discordのボイスチャンネル（VC）を中継・連携するためのBot�
 
 ## 💬 コマンド一覧 (Commands)
 
-> 💡 コマンドの一覧は、メインボットの「プロフィール（詳細説明）」にも記載されています。
+コマンドは既定で `!` から始まるテキストコマンドです（スラッシュコマンドではありません）。Renderで `COMMAND_PREFIX` を設定すると別の接頭辞を使えます。Discord Developer Portalで **Message Content Intent** を有効にしてください。
+
+Renderの環境変数に `DISCORD_TOKEN_MAIN` と、少なくとも1つのサブBot用トークン（`DISCORD_TOKEN_A`〜`DISCORD_TOKEN_E`）を設定してください。対応するBotアカウントをサーバーに招待し、使用するVCの閲覧・接続・発言権限を付与してください。
 
 | コマンド | 説明 |
 | :--- | :--- |
-| `/setvc [IDorName] [IDorName]...` | **入室コマンド（初期設定）**<br>・第1引数：全体の基準となるVCのIDまたは名前<br>・第2引数以降：中継ルートとなる各VCのIDまたは名前を順番に指定します。 |
-| `/connect` | **前回設定での入室コマンド**<br>前回の `/setvc` の設定を引き継いだまま、ボットをボイスチャンネルに入室させます。 |
-| `/vcleave` | **退室コマンド**<br>ボットをボイスチャンネルから退室させます。 |
-| `/vcon [番号] {only}` | **特定チャンネルへの発言有効化**<br>メインのVCから、特定のサブVCに対して個別に話しかけられるようにします。<br>※`[番号]` は、`/setvc` で設定（招待）されたサブボットの順番に対応します。<br>※末尾に `only` をつけると、**このコマンドを実行したユーザーだけ**に発言権限を制限します。 |
-| `/vcononly [番号]` | `/vcon [番号] only` と全く同じ機能です。 |
-| `/vcoff [番号]` | `/vcon` によって有効化されていた特定チャンネルへの音声送信を無効化します。 |
-| `/vol [番号] [音量]` | **マイク入力レベルの設定**<br>サブボットごとのマイク入力音量を変更します。<br>※設定可能な範囲：`0%` 〜 `300%` |
-|`/status`| **ステータスの表示**<br>詳細を表示させます。|
+| `!setvc [メインVC] [元VC 1] [元VC 2]...` | 指定したメインVCと元VCにBotを接続します。VC名またはIDを指定します。 |
+| `!connect` | 保存済みのチャンネル設定で再接続します。 |
+| `!vcleave` | すべてのBotをVCから切断します。 |
+| `!vcon [番号] [only]` | メインVCから番号に対応する元VCへ音声を中継します。`only` を付けると実行者の音声だけを中継します。 |
+| `!vcononly [番号]` | `!vcon [番号] only` と同じです。 |
+| `!vcoff [番号]` | 指定した元VCへの音声中継を停止します。 |
+| `!vol [番号] [音量]` | 元VCごとの中継音量を `0`〜`300`% で設定します。 |
