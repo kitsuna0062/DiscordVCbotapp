@@ -66,6 +66,48 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
     return { player: playersMap.get(idxStr) };
 }
 
+function monitorVoiceConnection(connection, label) {
+    connection.on('stateChange', (oldState, newState) => {
+        console.log(`[${label}] VC接続状態: ${oldState.status} -> ${newState.status}`);
+    });
+    connection.on('error', error => {
+        console.error(`[${label}] VC接続エラー:`, error);
+    });
+}
+
+function waitForVoiceReady(connection, label, timeoutMs = 45000) {
+    if (connection.state.status === VoiceConnectionStatus.Ready) return Promise.resolve();
+
+    return new Promise((resolve, reject) => {
+        const cleanup = () => {
+            clearTimeout(timeout);
+            connection.off('stateChange', onStateChange);
+            connection.off('error', onError);
+        };
+        const onError = error => {
+            cleanup();
+            reject(new Error(`${label} のVC接続中にエラーが発生しました: ${error.message}`, { cause: error }));
+        };
+        const onStateChange = (_oldState, newState) => {
+            if (newState.status === VoiceConnectionStatus.Ready) {
+                cleanup();
+                const { ws, udp } = connection.ping;
+                console.log(`[${label}] VC接続完了 (WebSocket ping: ${ws ?? '未計測'} ms, UDP ping: ${udp ?? '未計測'} ms)`);
+                resolve();
+            } else if (newState.status === VoiceConnectionStatus.Destroyed) {
+                cleanup();
+                reject(new Error(`${label} のVC接続が破棄されました。`));
+            }
+        };
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error(`${label} が${timeoutMs / 1000}秒以内にReadyになりませんでした (現在: ${connection.state.status})。RenderのUDP通信、BotのVC権限、Discord側のVC状態を確認してください。`));
+        }, timeoutMs);
+        connection.on('stateChange', onStateChange);
+        connection.on('error', onError);
+    });
+}
+
 const createClient = () => new Client({ 
     intents: [
         GatewayIntentBits.Guilds, 
@@ -264,7 +306,7 @@ async function findVoiceChannelForce(guild, target) {
 /**
  * 🌟 接続処理（受信音声をミキサー経由でメインBotへ中継）
  */
-function connectToVCs(guildId, mainChannel, sourceChannels) {
+async function connectToVCs(guildId, mainChannel, sourceChannels) {
     const existingReverseStreams = guildReverseStreams.get(guildId);
     if (existingReverseStreams) {
         for (const key of existingReverseStreams.keys()) {
@@ -289,14 +331,17 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
     sourceChannels.forEach((_, index) => { try { getVoiceConnection(guildId, `botSub_${index}`)?.destroy(); } catch(e){} });
 
     getOrCreateGuildResources(guildId, 0);
-    const connMain = joinVoiceChannel({ 
+    const connMain = joinVoiceChannel({
         channelId: mainChannel.id, 
         guildId, 
         adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, 
         selfMute: false, 
         selfDeaf: false, 
-        group: 'botMain'
+        group: 'botMain',
+        debug: process.env.VOICE_DEBUG === 'true'
     });
+    monitorVoiceConnection(connMain, `ギルド ${guildId} / Main`);
+    const connections = [{ connection: connMain, label: `ギルド ${guildId} / Main` }];
     
     const { player: mainPlayer } = getOrCreateGuildResources(guildId, 0);
     connMain.subscribe(mainPlayer);
@@ -304,33 +349,42 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
     guildMixers.set(guildId, mainMixer);
     mainPlayer.play(createAudioResource(mainMixer.output, { inputType: StreamType.Raw }));
 
-    connMain.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（PCMミキサー稼働）。`);
-    });
+    try {
+        for (const [index, channel] of sourceChannels.entries()) {
+            const clientSub = subClients[index];
+            if (!clientSub) {
+                throw new Error(`聴く係Bot_${index + 1} のクライアントがログインしていません。`);
+            }
 
-    sourceChannels.forEach(async (channel, index) => {
-        const clientSub = subClients[index];
-        if (!clientSub) {
-            console.error(`❌ [警告] 聴く係Bot_${index + 1} のクライアントが subClients 配列に存在しません。`);
-            return;
+            console.log(`🔎 聴く係Bot_${index + 1} のサーバー情報を取得中...`);
+            const targetGuild = await clientSub.guilds.fetch(guildId);
+
+            console.log(`🔊 聴く係Bot_${index + 1} がボイスチャンネル [${channel.name}] (${channel.id}) への接続を開始します。`);
+
+            const connSub = joinVoiceChannel({
+                channelId: channel.id,
+                guildId,
+                adapterCreator: targetGuild.voiceAdapterCreator,
+                selfMute: false,
+                selfDeaf: false,
+                group: `botSub_${index}`,
+                debug: process.env.VOICE_DEBUG === 'true'
+            });
+            const subLabel = `ギルド ${guildId} / Sub_${index + 1}`;
+            monitorVoiceConnection(connSub, subLabel);
+            connections.push({ connection: connSub, label: subLabel });
+            setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
         }
-        
-        const targetGuild = await clientSub.guilds.fetch(guildId).catch(() => null);
-        if (!targetGuild) return;
 
-        console.log(`🔊 聴く係Bot_${index + 1} をボイスチャンネル [${channel.name}] に接続し、音声購読を開始します。`);
-
-        const connSub = joinVoiceChannel({ 
-            channelId: channel.id, 
-            guildId, 
-            adapterCreator: targetGuild.voiceAdapterCreator, 
-            selfMute: false, 
-            selfDeaf: false, 
-            group: `botSub_${index}`
-        });
-        
-        setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
-    });
+        await Promise.all(connections.map(({ connection, label }) => waitForVoiceReady(connection, label)));
+    } catch (error) {
+        for (const { connection } of connections) connection.destroy();
+        mainPlayer.stop(true);
+        mainMixer.destroy();
+        guildMixers.delete(guildId);
+        throw error;
+    }
+    console.log(`🔊 [ギルド: ${guildId}] すべてのBotがVCに接続し、音声中継を開始できます。`);
 }
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
@@ -495,7 +549,7 @@ clientMain.on('messageCreate', async (message) => {
         console.log(`✅ チャンネル特定成功: メインID=${channelMain.id}, サブ台数=${sourceChannels.length}`);
 
         try {
-            connectToVCs(currentGuildId, channelMain, sourceChannels);
+            await connectToVCs(currentGuildId, channelMain, sourceChannels);
             let configData = {};
             if (fs.existsSync(CONFIG_FILE)) { try { configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch(e){} }
             configData[currentGuildId] = {
@@ -515,7 +569,10 @@ clientMain.on('messageCreate', async (message) => {
             });
 
             return message.reply(`✅ **中継接続ラインを開通しました！**${vcDetailMsg}`);
-        } catch (error) { console.error(error); return message.reply('❌ 接続エラーが発生しました。'); }
+        } catch (error) {
+            console.error(`[ギルド: ${currentGuildId}] 接続エラー:`, error);
+            return message.reply(`❌ VC接続エラー: ${error.message}`);
+        }
     }
 
     // ♻️ 履歴から再接続コマンド (!connect)
@@ -541,7 +598,7 @@ clientMain.on('messageCreate', async (message) => {
                 }); 
             }
 
-            connectToVCs(currentGuildId, channelMain, sourceChannels);
+            await connectToVCs(currentGuildId, channelMain, sourceChannels);
 
             let vcDetailMsg = `\n\n📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
             sourceChannels.forEach((ch, idx) => {
@@ -550,7 +607,10 @@ clientMain.on('messageCreate', async (message) => {
             });
 
             return message.reply(`♻️ 前回の設定・音量をロードして中継を再開しました！${vcDetailMsg}`);
-        } catch (error) { console.error(error); return message.reply('❌ 再接続エラー'); }
+        } catch (error) {
+            console.error(`[ギルド: ${currentGuildId}] 再接続エラー:`, error);
+            return message.reply(`❌ 再接続エラー: ${error.message}`);
+        }
     }
 });
 

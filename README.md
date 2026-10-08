@@ -22,6 +22,8 @@ Commands are text commands using `!` by default (not slash commands). Set `COMMA
 
 For Render, configure `DISCORD_TOKEN_MAIN` and at least one secondary token (`DISCORD_TOKEN_A` through `DISCORD_TOKEN_E`) as environment variables. Invite the matching bot accounts to the server and grant them permission to view, connect to, and speak in the selected voice channels.
 
+The `!setvc` command waits for every bot's voice connection to become ready. If it fails, check the Render logs for the per-bot VC state transitions and error. Set `VOICE_DEBUG=true` in Render for additional `@discordjs/voice` diagnostics; also verify that the host permits outbound UDP voice traffic.
+
 | Command | Description |
 | :--- | :--- |
 | `!setvc [main VC] [source VC 1] [source VC 2]...` | Join the specified main and source voice channels. Use channel names or IDs. |
@@ -55,6 +57,8 @@ Discordのボイスチャンネル（VC）を中継・連携するためのBot�
 コマンドは既定で `!` から始まるテキストコマンドです（スラッシュコマンドではありません）。Renderで `COMMAND_PREFIX` を設定すると別の接頭辞を使えます。Discord Developer Portalで **Message Content Intent** を有効にしてください。
 
 Renderの環境変数に `DISCORD_TOKEN_MAIN` と、少なくとも1つのサブBot用トークン（`DISCORD_TOKEN_A`〜`DISCORD_TOKEN_E`）を設定してください。対応するBotアカウントをサーバーに招待し、使用するVCの閲覧・接続・発言権限を付与してください。
+
+`!setvc` は全BotのVC接続がReadyになるまで待機します。接続に失敗した場合は、RenderログのBotごとのVC状態遷移とエラーを確認してください。Renderに `VOICE_DEBUG=true` を設定すると、`@discordjs/voice` の追加診断ログが有効になります。ホスト側で音声通信用の外向きUDP通信が許可されていることも確認してください。
 
 | コマンド | 説明 |
 | :--- | :--- |
