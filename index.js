@@ -292,7 +292,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         const targetGuild = await clientSub.guilds.fetch(guildId).catch(() => null);
         if (!targetGuild) return;
 
-        console.log(`🔊 聴く係Bot_${index + 1} をボイスチャンネル [${channel.name}] に接続します。`);
+        console.log(`🔊 聴く係Bot_${index + 1} をボイスチャンネル [${channel.name}] に接続し、強制音声購読を開始します。`);
 
         const connSub = joinVoiceChannel({ 
             channelId: channel.id, 
@@ -306,12 +306,15 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
         connSub.subscribe(subPlayer);
 
-        // 💡 接続が「Ready（完了）」になってから音声購読ハンドラーを確実に紐付ける
-        connSub.once(VoiceConnectionStatus.Ready, () => {
-            console.log(`📡 [ギルド: ${guildId}] 聴く係Bot_${index + 1} の音声購読を開始します。`);
-            setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
+        // 🔥 【重要】DAVEバグを回避するため、Readyステータスを待たずに即座にレシーバーをセットアップします
+        setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
+
+        // デバッグ用：現在の実際の音声接続ステータスを監視するログを追加
+        connSub.on('stateChange', (oldState, newState) => {
+            console.log(`📡 [Bot_${index + 1} 接続状態変化]: ${oldState.status} ➔ ${newState.status}`);
         });
     });
+
 
 }
 clientMain.on('messageCreate', async (message) => {
