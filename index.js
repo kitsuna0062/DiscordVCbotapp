@@ -274,12 +274,6 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         selfDeaf: false, 
         group: 'botMain'
     });
-    
-    // 💡 【修正】内部のnetworkingオブジェクトに対して、正しくIPv4（0.0.0.0）を強制バインドします
-    if (connMain.networking) {
-        connMain.networking.options.ip = '0.0.0.0';
-    }
-
 
     
     const { player: mainPlayer } = getOrCreateGuildResources(guildId, 0);
@@ -309,11 +303,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
             selfDeaf: false, 
             group: `botSub_${index}`
         });
-        
-        // 💡 【修正】サブBot側も同様に、正しくIPv4（0.0.0.0）を強制バインドします
-        if (connSub.networking) {
-            connSub.networking.options.ip = '0.0.0.0';
-        }
+    
 
         const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
         connSub.subscribe(subPlayer);
