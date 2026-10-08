@@ -270,11 +270,8 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
         connSub.subscribe(subPlayer);
 
-        // 💡 接続がReady（確立）した瞬間に、音声受信中継の登録と【対策1】の無音送信を実行
         connSub.once(VoiceConnectionStatus.Ready, () => {
             console.log(`✅ 聴く係Bot_${index + 1} の接続が確立しました。`);
-            
-            // 💡 対策1: サブBotに無音（ダミー音）を流し続けて、Discord側からの音声受信ラインを常に維持・安定させる
             try {
                 const silenceResource = createAudioResource(createSilenceStream(), { inputType: StreamType.Opus });
                 subPlayer.play(silenceResource);
@@ -282,8 +279,6 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
             } catch (silenceErr) {
                 console.error(`⚠️ 聴く係Bot_${index + 1} の無音送信の開始に失敗しました:`, silenceErr);
             }
-
-            // 音声受信中継ハンドラーを起動
             setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
         });
     });
@@ -302,7 +297,6 @@ process.on('uncaughtException', (err) => {
         if (!TOKENS.botMain || TOKENS.subs.length === 0) return console.error('❌ 環境変数が空です。'); 
         await clientMain.login(TOKENS.botMain);
 
-        // 🌟 メッセージ受信イベント（テキストコマンド判定）
         clientMain.on('messageCreate', async (message) => {
             if (message.author.bot || !message.content.startsWith(PREFIX)) return;
 
@@ -351,7 +345,8 @@ process.on('uncaughtException', (err) => {
                         return channels.find(c => c && (c.id === targetStr || c.name === targetStr) && (c.type === ChannelType.GuildVoice || c.isVoiceBased()));
                     };
 
-                    const mainVCName = args;
+                    // 💡 【バグ修正】配列全体ではなく、0番目の要素を確実に文字列として抽出
+                    const mainVCName = args[0];
                     const subVCNames = args.slice(1);
 
                     console.log(`🔍 探索ターゲット - メインVC: [${mainVCName}], サブVC群: [${subVCNames.join(', ')}]`);
@@ -373,7 +368,6 @@ process.on('uncaughtException', (err) => {
 
                     console.log(`✅ チャンネル特定成功: メインID=${channelMain.id}, サブ台数=${sourceChannels.length}`);
 
-                    // ログインさせたサブBotを確実にかつ順番通りに subClients 配列へ格納する
                     for (let i = 0; i < sourceChannels.length; i++) {
                         if (!subClients[i]) {
                             console.log(`🔗 聴く係Bot_${i + 1} をオンデマンドログイン中...`);
@@ -393,7 +387,6 @@ process.on('uncaughtException', (err) => {
 
                     if (statusNotice) statusNotice.edit('🔊 ボイスチャンネルへの一括接続ラインを開通しています...').catch(() => {});
 
-                    // ボイスチャンネルへ一括接続を実行
                     connectToVCs(currentGuildId, channelMain, sourceChannels);
                     
                     let configData = {};
@@ -414,6 +407,7 @@ process.on('uncaughtException', (err) => {
                     if (statusNotice) statusNotice.edit('❌ ボットの一括初期化、またはVC接続中にエラーが発生しました。').catch(() => {});
                 }
             }
+
             // 🎙️ !vcon コマンド [フォーマット: !vcon 番号 モード(任意)]
             if (command === 'vcon') {
                 const targetIdxNum = parseInt(args[0], 10);
