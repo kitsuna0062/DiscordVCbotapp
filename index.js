@@ -274,10 +274,12 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         selfDeaf: false, 
         group: 'botMain'
     });
-    // 💡 内部の音声WebSocketに対して、切断判定を緩くし、再接続の猶予を伸ばす手動パッチ
-    connMain.configureNetworkingOptions({
-        ip: '0.0.0.0'
-    });
+    
+    // 💡 【修正】内部のnetworkingオブジェクトに対して、正しくIPv4（0.0.0.0）を強制バインドします
+    if (connMain.networking) {
+        connMain.networking.options.ip = '0.0.0.0';
+    }
+
 
     
     const { player: mainPlayer } = getOrCreateGuildResources(guildId, 0);
@@ -299,21 +301,23 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
 
         console.log(`🔊 聴く係Bot_${index + 1} をボイスチャンネル [${channel.name}] に接続し、強制音声購読を開始します。`);
 
-        const connSub = joinVoiceChannel({ 
+            const connSub = joinVoiceChannel({ 
             channelId: channel.id, 
             guildId, 
             adapterCreator: targetGuild.voiceAdapterCreator, 
             selfMute: false, 
             selfDeaf: false, 
-            group: `botSub_${index}`,
-            debug: true
+            group: `botSub_${index}`
         });
-        connSub.configureNetworkingOptions({
-        ip: '0.0.0.0'
-    });
         
+        // 💡 【修正】サブBot側も同様に、正しくIPv4（0.0.0.0）を強制バインドします
+        if (connSub.networking) {
+            connSub.networking.options.ip = '0.0.0.0';
+        }
+
         const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
         connSub.subscribe(subPlayer);
+
 
         // 🔥 【重要】DAVEバグを回避するため、Readyステータスを待たずに即座にレシーバーをセットアップします
         setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
