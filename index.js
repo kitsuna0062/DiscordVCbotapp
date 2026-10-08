@@ -356,7 +356,14 @@ process.on('uncaughtException', (err) => {
 
             // 接続・中継開始コマンド (/setvc)
             if (commandName === 'setvc') {
-                await interaction.deferReply();
+                // 💡 【最重要修正】3秒ルール回避のため、一切の処理（変数取得など）より前に即座に返信保留を送信する
+                try {
+                    await interaction.deferReply();
+                } catch (e) {
+                    console.error("deferReplyに失敗しました。Discordのレスポンスが遅延しています:", e);
+                    return;
+                }
+
                 const mainChannelRaw = options.getChannel('main_vc');
                 const channelMain = guild.channels.cache.get(mainChannelRaw?.id);
 
@@ -369,10 +376,11 @@ process.on('uncaughtException', (err) => {
                 const sourceChannels = subChannelIds.map(id => guild.channels.cache.get(id)).filter(Boolean);
 
                 if (!channelMain || sourceChannels.length === 0) {
-                    return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。');
+                    return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。').catch(() => {});
                 }
 
                 try {
+                    // 重いVC一括接続・中継セットアップを実行
                     connectToVCs(currentGuildId, channelMain, sourceChannels);
                     
                     let configData = {};
@@ -385,12 +393,13 @@ process.on('uncaughtException', (err) => {
                         const v = guildVolumes.get(currentGuildId)?.get(String(idx + 1)) ?? 100;
                         vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
                     });
-                    return interaction.editReply(`🔊 中継接続ラインを開通しました！\n\n${vcDetailMsg}`);
+                    return interaction.editReply(`🔊 中継接続ラインを開通しました！\n\n${vcDetailMsg}`).catch(() => {});
                 } catch (error) { 
                     console.error(error); 
-                    return interaction.editReply('❌ 接続エラーが発生しました。'); 
+                    return interaction.editReply('❌ 接続エラーが発生しました。').catch(() => {}); 
                 }
             }
+
             // 🎙️ vcon
             if (commandName === 'vcon') {
                 const targetIdxNum = options.getInteger('number');
