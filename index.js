@@ -31,6 +31,8 @@ const TOKENS = {
     ].filter(t => t && t !== '') 
 };
 
+const PREFIX = process.env.COMMAND_PREFIX || '!';
+
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
 const guildPlayers = new Map();       // 各ギルドの各Botプレイヤーを個別に管理する二次元Map
