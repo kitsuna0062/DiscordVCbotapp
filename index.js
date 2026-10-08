@@ -288,7 +288,6 @@ process.on('uncaughtException', (err) => {
 (async () => {
     try {
         if (!TOKENS.botMain || TOKENS.subs.length === 0) return console.error('❌ 環境変数が空です。'); 
-        // 💡 起動時はメインBotのみログイン（CPU消費をゼロに抑え、コマンド即時応答を可能にする）
         await clientMain.login(TOKENS.botMain);
 
         clientMain.on('interactionCreate', async (interaction) => {
@@ -310,22 +309,24 @@ process.on('uncaughtException', (err) => {
                     const connSub = getVoiceConnection(currentGuildId, `botSub_${i}`);
                     if (connSub) {
                         const v = guildVolumes.get(currentGuildId)?.get(String(i + 1)) ?? 100;
-                        statusMsg += `・🎧 聴く係Bot ${i + 1}: 🟢 接続中 (<#${connSub.joinConfig.channelId}>) [音量: ${v}%]\n`;
+                        statusMsg += `=・🎧 聴く係Bot ${i + 1}: 🟢 接続中 (<#${connSub.joinConfig.channelId}>) [音量: ${v}%]\n`;
                     } else {
-                        statusMsg += `・🎧 聴く係Bot ${i + 1}: 🔴 未接続 (未初期化含む)\n`;
+                        statusMsg += `・🎧 聴く係Bot ${i + 1}: 🔴 未接続\n`;
                     }
                 }
-                return interaction.reply({ content: statusMsg });
+                return interaction.reply({ content: statusMsg }).catch(() => {});
             }
 
             // 接続・中継開始コマンド (/setvc)
             if (commandName === 'setvc') {
-                // 💡 CPU負荷がゼロのため、確実に3秒以内に同期応答(reply)が成立し、タイムアウトを回避
-                try {
-                    await interaction.reply({ content: '⏳ 接続中継ラインを検出しました。サブBot群の同期ログインと接続を開始します（約5〜10秒かかります）...' });
-                } catch (e) { console.error("初期応答エラー:", e); return; }
-
+                // 💡 【核心の修正】Renderの復帰遅延による3秒超過を想定し、通常のreplyをスキップして即座に非同期処理をスケジュール
                 setImmediate(async () => {
+                    let statusNotice = null;
+                    try {
+                        // 制限時間のないWebhook経由で、現在の進捗をチャンネルへテキスト送信
+                        statusNotice = await interaction.channel.send('⏳ Renderサーバーが応答しました。接続中継ラインを検出中。サブBot群の起動を開始します...');
+                    } catch (e) { console.error("通知の送信に失敗しました:", e); }
+
                     try {
                         const mainChannelRaw = options.getChannel('main_vc');
                         const channelMain = guild.channels.cache.get(mainChannelRaw?.id);
@@ -339,17 +340,17 @@ process.on('uncaughtException', (err) => {
                         const sourceChannels = subChannelIds.map(id => guild.channels.cache.get(id)).filter(Boolean);
 
                         if (!channelMain || sourceChannels.length === 0) {
-                            return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。').catch(() => {});
+                            if (statusNotice) statusNotice.edit('❌ 指定されたボイスチャンネルが正しく選択されていません。').catch(() => {});
+                            return;
                         }
 
-                        // 💡 【核心の修正】選ばれたサブBotの数だけ、その場でオンデマンドにバックグラウンドログインさせる
+                        // サブBotを順番にバックグラウンドログイン
                         for (let i = 0; i < sourceChannels.length; i++) {
                             if (!subClients[i]) {
-                                console.log(`🔗 聴く係Bot_${i + 1} をオンデマンド接続中...`);
+                                if (statusNotice) statusNotice.edit(`🔗 聴く係Bot_${i + 1} を初期化中（サーバー復帰後のセットアップ）...`).catch(() => {});
                                 const subClient = createClient();
                                 await new Promise((resolve, reject) => {
                                     subClient.once('ready', () => {
-                                        console.log(`✅ 聴く係Bot_${i + 1} オンライン。`);
                                         subClients[i] = subClient;
                                         resolve();
                                     });
@@ -358,7 +359,9 @@ process.on('uncaughtException', (err) => {
                             }
                         }
 
-                        // すべての必要なBotの準備ができたらVCへ一括接続
+                        if (statusNotice) statusNotice.edit('🔊 ボイスチャンネルへの一括接続ラインを開通しています...').catch(() => {});
+
+                        // ボイスチャンネルへの一括接続処理
                         connectToVCs(currentGuildId, channelMain, sourceChannels);
                         
                         let configData = {};
@@ -372,13 +375,17 @@ process.on('uncaughtException', (err) => {
                             vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
                         });
                         
-                        await interaction.editReply(`🔊 中継接続ラインを開通しました！\n\n${vcDetailMsg}`).catch(() => {});
+                        // すべての中継セットアップが完了したら、メッセージを完了に更新
+                        if (statusNotice) {
+                            await statusNotice.edit(`✅ **中継接続ラインを開通しました！**\n\n${vcDetailMsg}`).catch(() => {});
+                        }
                     } catch (error) { 
                         console.error("セットアップエラー:", error); 
-                        await interaction.editReply('❌ 接続またはBotの初期化エラーが発生しました。').catch(() => {}); 
+                        if (statusNotice) statusNotice.edit('❌ ボットの一括初期化、またはVC接続中にエラーが発生しました。').catch(() => {});
                     }
                 });
             }
+
             // 🎙️ vcon
             if (commandName === 'vcon') {
                 const targetIdxNum = options.getInteger('number');
