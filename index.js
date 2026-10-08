@@ -64,10 +64,16 @@ const createClient = () => new Client({
         GatewayIntentBits.Guilds, 
         GatewayIntentBits.GuildVoiceStates, 
         GatewayIntentBits.GuildMessages, 
-        GatewayIntentBits.MessageContent, // メッセージ読み取り用
+        GatewayIntentBits.MessageContent, 
         GatewayIntentBits.GuildMembers
+    ],
+    // 💡 状態変化を漏らさずキャッチするための partials 設定を追加
+    partials: [
+        Proxy.User, 
+        Proxy.GuildMember
     ]
 });
+
 
 const clientMain = createClient();
 const subClients = []; // 💡 起動時にあらかじめすべてのクライアントオブジェクトを生成して格納します
@@ -276,7 +282,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         console.log(`🔊 [ギルド: ${guildId}] 大域ライン開通（独立プレイヤー駆動）。`);
     });
 
-    sourceChannels.forEach(async (channel, index) => {
+        sourceChannels.forEach(async (channel, index) => {
         const clientSub = subClients[index];
         if (!clientSub) {
             console.error(`❌ [警告] 聴く係Bot_${index + 1} のクライアントが初期化されていません。`);
@@ -286,7 +292,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         const targetGuild = await clientSub.guilds.fetch(guildId).catch(() => null);
         if (!targetGuild) return;
 
-        console.log(`🔊 聴く係Bot_${index + 1} をボイスチャンネル [${channel.name}] に接続し、音声購読を開始します。`);
+        console.log(`🔊 聴く係Bot_${index + 1} をボイスチャンネル [${channel.name}] に接続します。`);
 
         const connSub = joinVoiceChannel({ 
             channelId: channel.id, 
@@ -300,8 +306,13 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
         connSub.subscribe(subPlayer);
 
-        setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
+        // 💡 接続が「Ready（完了）」になってから音声購読ハンドラーを確実に紐付ける
+        connSub.once(VoiceConnectionStatus.Ready, () => {
+            console.log(`📡 [ギルド: ${guildId}] 聴く係Bot_${index + 1} の音声購読を開始します。`);
+            setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
+        });
     });
+
 }
 clientMain.on('messageCreate', async (message) => {
     if (message.author.bot) return;
