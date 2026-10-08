@@ -276,6 +276,8 @@ process.on('uncaughtException', (err) => {
 
             // 🔊 !setvc コマンド [フォーマット: !setvc VC名1 VC名2...]
             if (command === 'setvc') {
+                console.log(`📥 コマンド受信 (!setvc): ${message.content}`);
+
                 if (args.length < 2) {
                     return message.reply('❌ 使用方法: `!setvc [メインVC名] [サブVC名1] [サブVC名2]...`').catch(() => {});
                 }
@@ -286,6 +288,7 @@ process.on('uncaughtException', (err) => {
                     // キャッシュを最新にするため、一度ギルド内のすべてのチャンネル情報を強制取得
                     const channels = await guild.channels.fetch().catch(() => null);
                     if (!channels) {
+                        console.error('❌ サーバーのチャンネル一覧の取得に失敗しました。');
                         if (statusNotice) statusNotice.edit('❌ サーバーのチャンネル一覧の取得に失敗しました。').catch(() => {});
                         return;
                     }
@@ -295,25 +298,33 @@ process.on('uncaughtException', (err) => {
                         return channels.find(c => c && (c.id === targetStr || c.name === targetStr) && (c.type === ChannelType.GuildVoice || c.isVoiceBased()));
                     };
 
+                    // 💡 【バグ修正】argsから文字列として正確にファースト引数を抽出
                     const mainVCName = args[0];
                     const subVCNames = args.slice(1);
+
+                    console.log(`🔍 探索ターゲット - メインVC: [${mainVCName}], サブVC群: [${subVCNames.join(', ')}]`);
 
                     const channelMain = findVoiceChannel(mainVCName);
                     const sourceChannels = subVCNames.map(name => findVoiceChannel(name)).filter(Boolean);
 
-                    if (!channelMain || sourceChannels.length === 0) {
-                        if (statusNotice) statusNotice.edit('❌ 指定された名前のボイスチャンネルが見つかりません。名前が完全に一致しているか確認してください。').catch(() => {});
+                    if (!channelMain) {
+                        console.error(`❌ メインVC [${mainVCName}] が見つかりませんでした。`);
+                        if (statusNotice) statusNotice.edit(`❌ メインVC [${mainVCName}] が見つかりません。名前が完全に一致しているか確認してください。`).catch(() => {});
                         return;
                     }
 
-                    if (sourceChannels.length > TOKENS.subs.length) {
-                        if (statusNotice) statusNotice.edit(`❌ 用意されているサブBotの数（最大 ${TOKENS.subs.length} 台）を超えています。`).catch(() => {});
+                    if (sourceChannels.length === 0) {
+                        console.error(`❌ 有効なサブVCが1つも見つかりませんでした。入力値: ${subVCNames.join(', ')}`);
+                        if (statusNotice) statusNotice.edit('❌ 指定された名前のサブボイスチャンネルが見つかりません。').catch(() => {});
                         return;
                     }
 
-                    // 💡 選ばれたサブBotの数だけ、その場で初めてオンデマンドにバックグラウンドログインさせる
+                    console.log(`✅ チャンネル特定成功: メインID=${channelMain.id}, サブ台数=${sourceChannels.length}`);
+
+                    // 選ばれたサブBotの数だけ、その場で初めてオンデマンドにバックグラウンドログインさせる
                     for (let i = 0; i < sourceChannels.length; i++) {
                         if (!subClients[i]) {
+                            console.log(`🔗 聴く係Bot_${i + 1} をオンデマンドログイン中...`);
                             if (statusNotice) statusNotice.edit(`🔗 聴く係Bot_${i + 1} をオンデマンドログイン中...`).catch(() => {});
                             const subClient = createClient();
                             await new Promise((resolve, reject) => {
@@ -340,11 +351,13 @@ process.on('uncaughtException', (err) => {
                     });
                     
                     if (statusNotice) statusNotice.edit(`✅ **中継接続ラインを開通しました！**\n\n${vcDetailMsg}`).catch(() => {});
+                    console.log(`🎉 ギルド [${currentGuildId}] での中継開通が正常に完了しました。`);
                 } catch (error) { 
-                    console.error("セットアップエラー:", error); 
+                    console.error("❌ セットアップエラー:", error); 
                     if (statusNotice) statusNotice.edit('❌ ボットの一括初期化、またはVC接続中にエラーが発生しました。').catch(() => {});
                 }
             }
+
             // 🎙️ !vcon コマンド [フォーマット: !vcon 番号 モード(任意)]
             if (command === 'vcon') {
                 const targetIdxNum = parseInt(args[0], 10);
