@@ -24,6 +24,8 @@ For Render, configure `DISCORD_TOKEN_MAIN` and at least one secondary token (`DI
 
 The `!setvc` command waits for every bot's voice connection to become ready. If it fails, check the Render logs for the per-bot VC state transitions and error. Set `VOICE_DEBUG=true` in Render for additional `@discordjs/voice` diagnostics; also verify that the host permits outbound UDP voice traffic.
 
+Use Node.js `22.22.1` or newer. The project uses `@discordjs/voice` 0.19.1, which supports Discord's required DAVE voice encryption and Voice Gateway v8.
+
 | Command | Description |
 | :--- | :--- |
 | `!setvc [main VC] [source VC 1] [source VC 2]...` | Join the specified main and source voice channels. Use channel names or IDs. |
@@ -59,6 +61,8 @@ Discordのボイスチャンネル（VC）を中継・連携するためのBot�
 Renderの環境変数に `DISCORD_TOKEN_MAIN` と、少なくとも1つのサブBot用トークン（`DISCORD_TOKEN_A`〜`DISCORD_TOKEN_E`）を設定してください。対応するBotアカウントをサーバーに招待し、使用するVCの閲覧・接続・発言権限を付与してください。
 
 `!setvc` は全BotのVC接続がReadyになるまで待機します。接続に失敗した場合は、RenderログのBotごとのVC状態遷移とエラーを確認してください。Renderに `VOICE_DEBUG=true` を設定すると、`@discordjs/voice` の追加診断ログが有効になります。ホスト側で音声通信用の外向きUDP通信が許可されていることも確認してください。
+
+Node.js `22.22.1` 以降を使用してください。`@discordjs/voice` 0.19.1 に更新し、Discordで必須となったDAVE音声暗号化とVoice Gateway v8に対応しています。
 
 | コマンド | 説明 |
 | :--- | :--- |
