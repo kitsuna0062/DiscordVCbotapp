@@ -4,7 +4,7 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, StreamType, ge
 const prism = require('prism-media');
 const fs = require('fs');
 const path = require('path');
-const { PassThrough } = require('stream'); 
+const { PassThrough, Readable } = require('stream'); 
 const express = require('express');
 
 // ==========================================
@@ -16,6 +16,18 @@ const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => { res.send('Discord VC Relay Bot is running! 🚀'); });
 app.get('/health', (req, res) => { res.status(200).send('OK'); });
 app.listen(PORT, () => { console.log(`[HTTP Server] Render無料プラン用サーバーが起動しました（ポート: ${PORT}）`); });
+
+// ==========================================
+// 💡 対策1: 無音（ダミー音）ストリームを作成するヘルパー関数
+// ==========================================
+function createSilenceStream() {
+    return new Readable({
+        read() {
+            // Discordサーバーにアクティブと認識させるためのOpus無音フレームパケット
+            this.push(Buffer.from([0xF8, 0xFF, 0xFE])); 
+        }
+    });
+}
 
 // ==========================================
 // 🌟 環境変数トークンの読み込み
@@ -32,7 +44,7 @@ const TOKENS = {
 };
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
-const PREFIX = '!'; // 💡 メッセージコマンド用のプレフィックス
+const PREFIX = '!'; 
 
 const guildPlayers = new Map();       
 const guildVolumes = new Map();       
@@ -56,13 +68,12 @@ function getOrCreateGuildResources(guildId, sourceIndex) {
     return { player: playersMap.get(idxStr) };
 }
 
-// 💡 メッセージ（!コマンド）を読み取るため、MessageContentインテントを追加
 const createClient = () => new Client({ 
     intents: [
         GatewayIntentBits.Guilds, 
         GatewayIntentBits.GuildVoiceStates, 
         GatewayIntentBits.GuildMessages, 
-        GatewayIntentBits.MessageContent, // 👈 ユーザーの「!コマンド」を読み取るために必須
+        GatewayIntentBits.MessageContent, 
         GatewayIntentBits.GuildMembers
     ]
 });
@@ -71,17 +82,37 @@ const clientMain = createClient();
 const subClients = []; 
 function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex, mainConnection) {
     const receiver = connection.receiver;
+    
+    if (!guildActiveStreams.has(guildId)) guildActiveStreams.set(guildId, new Map());
     const activeStreams = guildActiveStreams.get(guildId);
 
-    connection.on(VoiceConnectionStatus.Ready, () => { console.log(`📡 [Bot: ${sourceName}] 受信準備完了。`); });
+    connection.on(VoiceConnectionStatus.Ready, () => { 
+        console.log(`📡 [Bot: ${sourceName}] 受信準備完了。VCの監視を開始します。`); 
+    });
 
     receiver.speaking.on('start', (userId) => {
+        if (userId === clientMain.user?.id) return;
+        const isAnyBot = subClients.some(sub => sub && sub.user?.id === userId);
+        if (isAnyBot) return;
+
         const compositeKey = `${sourceIndex}_${userId}`;
-        if (activeStreams.has(compositeKey)) return; 
+        
+        // 💡 既存のストリームがある場合は再利用（猶予時間中の復帰に対応）
+        if (activeStreams.has(compositeKey)) {
+            const existing = activeStreams.get(compositeKey);
+            if (existing.timeoutId) {
+                clearTimeout(existing.timeoutId);
+                existing.timeoutId = null;
+                console.log(`♻️ [Bot: ${sourceName}] 猶予時間内の音声再開を検知。ストリームを再利用します。(User: ${userId})`);
+            }
+            return; 
+        }
+        
+        console.log(`🎵 [Bot: ${sourceName}] 新しい音声を検知。メインVCへ中継を開始します (User: ${userId})`);
         
         const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
         const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
-        const passThrough = new PassThrough({ highWaterMark: 1024 * 16 });
+        const passThrough = new PassThrough(); // 💡 対策3: 固定バッファで制御せず AudioPlayerの内部バッファに任せる
 
         opusStream.on('error', () => {}); decoder.on('error', () => {}); passThrough.on('error', () => {});
         opusStream.pipe(decoder).pipe(passThrough);
@@ -97,7 +128,7 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
         mainConnection.subscribe(userSpecificPlayer);
         userSpecificPlayer.play(resource);
 
-        activeStreams.set(compositeKey, { opusStream, decoder, passThrough, resource, player: userSpecificPlayer });
+        activeStreams.set(compositeKey, { opusStream, decoder, passThrough, player: userSpecificPlayer, timeoutId: null });
     });
 
     receiver.speaking.on('end', (userId) => {
@@ -105,15 +136,21 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
         const streamData = activeStreams.get(compositeKey);
         if (!streamData) return;
 
-        const { opusStream, decoder, passThrough, player } = streamData;
-        setTimeout(() => {
+        if (streamData.timeoutId) clearTimeout(streamData.timeoutId);
+
+        // 💡 対策2: 話し終わっても即座に破壊せず、5秒（5000ms）の猶予を持たせる
+        streamData.timeoutId = setTimeout(() => {
             try { 
-                if (player) player.stop(true); 
-                decoder.unpipe(passThrough); opusStream.unpipe(decoder);
-                passThrough.destroy(); decoder.destroy(); opusStream.destroy(); 
+                if (streamData.player) streamData.player.stop(true); 
+                streamData.decoder.unpipe(streamData.passThrough); 
+                streamData.opusStream.unpipe(streamData.decoder);
+                streamData.passThrough.destroy(); 
+                streamData.decoder.destroy(); 
+                streamData.opusStream.destroy(); 
             } catch(e){}
             activeStreams.delete(compositeKey);
-        }, 250);
+            console.log(`扫 [Bot: ${sourceName}] 5秒間無音が続いたため、リソースを完全に解放しました。(User: ${userId})`);
+        }, 5000);
     });
 }
 
@@ -126,15 +163,17 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
 
     const startHandler = (userId) => {
         if (userId === clientMain.user?.id) return;
-        if (subClients.some(sub => sub.user?.id === userId)) return;
+        if (subClients.some(sub => sub && sub.user?.id === userId)) return;
         if (isOnly && userId !== speakerUserId) return; 
         
         const streamKey = `reverse_${targetSubIndex}_${userId}`;
         if (reverseMap.has(streamKey)) return;
 
+        console.log(`📢 メインVCの発言を検知 ➔ サブBot ${targetSubIndex} への逆方向流し込みを開始します。`);
+
         const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
         const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
-        const passThrough = new PassThrough({ highWaterMark: 1024 * 16 });
+        const passThrough = new PassThrough();
 
         opusStream.on('error', () => {}); decoder.on('error', () => {}); passThrough.on('error', () => {});
         opusStream.pipe(decoder).pipe(passThrough);
@@ -165,7 +204,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
                 passThrough.destroy(); decoder.destroy(); opusStream.destroy();
             } catch(e){}
             reverseMap.delete(streamKey);
-        }, 250);
+        }, 1000); // 💡 逆方向中継も猶予を1秒に延長して安定化
     };
 
     receiver.speaking.on('start', startHandler);
@@ -191,7 +230,7 @@ function stopReverseVoiceReceiver(guildId, targetSubIndex) {
                 if (streamData.player) streamData.player.stop(true);
                 streamData.decoder.unpipe(streamData.passThrough);
                 streamData.opusStream.unpipe(streamData.decoder);
-                passThrough.destroy(); streamData.decoder.destroy(); streamData.opusStream.destroy();
+                streamData.passThrough.destroy(); streamData.decoder.destroy(); streamData.opusStream.destroy();
             } catch(e){}
             reverseMap.delete(key);
         }
@@ -214,11 +253,13 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
     connMain.subscribe(mainPlayer);
 
     sourceChannels.forEach(async (channel, index) => {
-        const clientSub = subClients[index];
+        const clientSub = subClients[index]; 
         if (!clientSub) return;
         
         const targetGuild = await clientSub.guilds.fetch(guildId).catch(() => null);
         if (!targetGuild) return;
+
+        console.log(`🔊 聴く係Bot_${index + 1} をボイスチャンネル [${channel.name}] に入室させます。`);
 
         const connSub = joinVoiceChannel({ 
             channelId: channel.id, guildId, 
@@ -229,7 +270,22 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
         connSub.subscribe(subPlayer);
 
-        setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
+        // 💡 接続がReady（確立）した瞬間に、音声受信中継の登録と【対策1】の無音送信を実行
+        connSub.once(VoiceConnectionStatus.Ready, () => {
+            console.log(`✅ 聴く係Bot_${index + 1} の接続が確立しました。`);
+            
+            // 💡 対策1: サブBotに無音（ダミー音）を流し続けて、Discord側からの音声受信ラインを常に維持・安定させる
+            try {
+                const silenceResource = createAudioResource(createSilenceStream(), { inputType: StreamType.Opus });
+                subPlayer.play(silenceResource);
+                console.log(`🤫 聴く係Bot_${index + 1} ➔ 常時「無音パケット」のバックグラウンド送信を開始しました。`);
+            } catch (silenceErr) {
+                console.error(`⚠️ 聴く係Bot_${index + 1} の無音送信の開始に失敗しました:`, silenceErr);
+            }
+
+            // 音声受信中継ハンドラーを起動
+            setupVoiceReceiverForMain(connSub, `Sub_${index + 1}`, guildId, index + 1, connMain);
+        });
     });
 }
 
@@ -295,8 +351,7 @@ process.on('uncaughtException', (err) => {
                         return channels.find(c => c && (c.id === targetStr || c.name === targetStr) && (c.type === ChannelType.GuildVoice || c.isVoiceBased()));
                     };
 
-                    // 💡 【修正】argsの0番目からメイン部屋の文字列を確実に取得し、それ以降をサブ部屋の配列にする
-                    const mainVCName = args[0];
+                    const mainVCName = args;
                     const subVCNames = args.slice(1);
 
                     console.log(`🔍 探索ターゲット - メインVC: [${mainVCName}], サブVC群: [${subVCNames.join(', ')}]`);
@@ -318,14 +373,19 @@ process.on('uncaughtException', (err) => {
 
                     console.log(`✅ チャンネル特定成功: メインID=${channelMain.id}, サブ台数=${sourceChannels.length}`);
 
-                    // 選ばれたサブBotの数だけ、その場で初めてオンデマンドにバックグラウンドログインさせる
+                    // ログインさせたサブBotを確実にかつ順番通りに subClients 配列へ格納する
                     for (let i = 0; i < sourceChannels.length; i++) {
                         if (!subClients[i]) {
                             console.log(`🔗 聴く係Bot_${i + 1} をオンデマンドログイン中...`);
                             if (statusNotice) statusNotice.edit(`🔗 聴く係Bot_${i + 1} をオンデマンドログイン中...`).catch(() => {});
+                            
                             const subClient = createClient();
                             await new Promise((resolve, reject) => {
-                                subClient.once('ready', () => { subClients[i] = subClient; resolve(); });
+                                subClient.once('ready', () => { 
+                                    console.log(`✅ 聴く係Bot_${i + 1} オンライン完了。`); 
+                                    subClients[i] = subClient; 
+                                    resolve(); 
+                                });
                                 subClient.login(TOKENS.subs[i]).catch(reject);
                             });
                         }
@@ -333,7 +393,7 @@ process.on('uncaughtException', (err) => {
 
                     if (statusNotice) statusNotice.edit('🔊 ボイスチャンネルへの一括接続ラインを開通しています...').catch(() => {});
 
-                    // ボイスチャンネルへ一括接続（ここで音声受信ハンドラーが正常に紐付きます）
+                    // ボイスチャンネルへ一括接続を実行
                     connectToVCs(currentGuildId, channelMain, sourceChannels);
                     
                     let configData = {};
@@ -354,8 +414,6 @@ process.on('uncaughtException', (err) => {
                     if (statusNotice) statusNotice.edit('❌ ボットの一括初期化、またはVC接続中にエラーが発生しました。').catch(() => {});
                 }
             }
-
-
             // 🎙️ !vcon コマンド [フォーマット: !vcon 番号 モード(任意)]
             if (command === 'vcon') {
                 const targetIdxNum = parseInt(args[0], 10);
