@@ -274,7 +274,7 @@ process.on('uncaughtException', (err) => {
                 return message.reply(statusMsg).catch(() => {});
             }
 
-            // 🔊 !setvc コマンド [フォーマット: !setvc VC名1 VC名2...]
+            // 🔊 !setvc コマンド [フォーマット: !setvc メインVC名 サブVC名1 サブVC名2...]
             if (command === 'setvc') {
                 console.log(`📥 コマンド受信 (!setvc): ${message.content}`);
 
@@ -285,20 +285,17 @@ process.on('uncaughtException', (err) => {
                 const statusNotice = await message.reply('⏳ ボイスチャンネルを探索中... サブBot群の初期化を開始します。').catch(() => null);
 
                 try {
-                    // キャッシュを最新にするため、一度ギルド内のすべてのチャンネル情報を強制取得
                     const channels = await guild.channels.fetch().catch(() => null);
                     if (!channels) {
-                        console.error('❌ サーバーのチャンネル一覧の取得に失敗しました。');
                         if (statusNotice) statusNotice.edit('❌ サーバーのチャンネル一覧の取得に失敗しました。').catch(() => {});
                         return;
                     }
 
-                    // 引数の文字列（チャンネル名、またはID）から対応するボイスチャンネルを特定
                     const findVoiceChannel = (targetStr) => {
                         return channels.find(c => c && (c.id === targetStr || c.name === targetStr) && (c.type === ChannelType.GuildVoice || c.isVoiceBased()));
                     };
 
-                    // 💡 【バグ修正】argsから文字列として正確にファースト引数を抽出
+                    // 💡 【修正】argsの0番目からメイン部屋の文字列を確実に取得し、それ以降をサブ部屋の配列にする
                     const mainVCName = args[0];
                     const subVCNames = args.slice(1);
 
@@ -336,7 +333,7 @@ process.on('uncaughtException', (err) => {
 
                     if (statusNotice) statusNotice.edit('🔊 ボイスチャンネルへの一括接続ラインを開通しています...').catch(() => {});
 
-                    // ボイスチャンネルへ一括接続
+                    // ボイスチャンネルへ一括接続（ここで音声受信ハンドラーが正常に紐付きます）
                     connectToVCs(currentGuildId, channelMain, sourceChannels);
                     
                     let configData = {};
@@ -357,6 +354,7 @@ process.on('uncaughtException', (err) => {
                     if (statusNotice) statusNotice.edit('❌ ボットの一括初期化、またはVC接続中にエラーが発生しました。').catch(() => {});
                 }
             }
+
 
             // 🎙️ !vcon コマンド [フォーマット: !vcon 番号 モード(任意)]
             if (command === 'vcon') {
