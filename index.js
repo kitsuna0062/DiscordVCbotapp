@@ -77,7 +77,8 @@ const createClient = () => new Client({
         GatewayIntentBits.Guilds, 
         GatewayIntentBits.GuildVoiceStates, 
         GatewayIntentBits.GuildMessages, 
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
     ]
 });
 
@@ -463,29 +464,65 @@ process.on('uncaughtException', (err) => {
             const { commandName, options } = interaction;
 
             // 📊 ステータス確認コマンド (/status)
-            if (commandName === 'status') {
-                let statusMsg = `📊 **【中継システム現在状況】**\n`;
-                
-                const connMain = getVoiceConnection(currentGuildId, 'botMain');
-                if (connMain) {
-                    statusMsg += `・📢 大域Bot (Main): 🟢 接続中 (<#${connMain.joinConfig.channelId}>)\n`;
-                } else {
-                    statusMsg += `・📢 大域Bot (Main): 🔴 未接続\n`;
-                }
+            // 🌟 5つ目のブロックの /setvc の中身を以下に差し替え
 
-                for (let i = 0; i < TOKENS.subs.length; i++) {
-                    const connSub = getVoiceConnection(currentGuildId, `botSub_${i}`);
-                    if (connSub) {
-                        const volMap = guildVolumes.get(currentGuildId);
-                        const v = volMap?.get(String(i + 1)) ?? 100;
-                        statusMsg += `・🎧 聴く係Bot ${i + 1}: 🟢 接続中 (<#${connSub.joinConfig.channelId}>) [音量: ${v}%]\n`;
-                    } else {
-                        statusMsg += `・🎧 聴く係Bot ${i + 1}: 🔴 未接続\n`;
-                    }
-                }
+        if (commandName === 'setvc') {
+            await interaction.deferReply();
 
-                return interaction.reply({ content: statusMsg });
+            // options.getChannel() から取得
+            const mainChannelRaw = options.getChannel('main_vc');
+            const channelMain = guild.channels.cache.get(mainChannelRaw?.id);
+
+            const subChannelIds = [
+                options.getChannel('sub_vc_1')?.id,
+                options.getChannel('sub_vc_2')?.id,
+                options.getChannel('sub_vc_3')?.id
+            ].filter(Boolean);
+
+            // キャッシュから完全なオブジェクトの配列を作成
+            const sourceChannels = subChannelIds
+                .map(id => guild.channels.cache.get(id))
+                .filter(Boolean);
+
+            if (!channelMain || sourceChannels.length === 0) {
+                return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。');
             }
+
+            if (sourceChannels.length > TOKENS.subs.length) {
+               return interaction.editReply(`❌ 用意されているサブBotの数（最大 ${TOKENS.subs.length} 台）を超えています。`);
+            }
+
+            try {
+                // 💡 ここで sourceChannels (オブジェクトの配列) を正しく渡す
+                connectToVCs(currentGuildId, channelMain, sourceChannels);
+
+                let configData = {};
+                if (fs.existsSync(CONFIG_FILE)) { 
+                    try { configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch(e){} 
+                }
+                configData[currentGuildId] = {
+                    mainId: channelMain.id,
+                    sourceIds: sourceChannels.map(c => c.id),
+                    volumes: configData[currentGuildId]?.volumes || {}
+                };
+                fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
+
+                if (!guildVolumes.has(currentGuildId)) guildVolumes.set(currentGuildId, new Map());
+                const volMap = guildVolumes.get(currentGuildId);
+
+                let vcDetailMsg = `📌 **【接続チャンネル詳細】**\n・📢 大域Bot (Main) ➔ <#${channelMain.id}>`;
+                    sourceChannels.forEach((ch, idx) => {
+                    const v = volMap.get(String(idx + 1)) ?? 100;
+                    vcDetailMsg += `\n・🎧 聴く係Bot ${idx + 1} ➔ <#${ch.id}> (音量: **${v}%**)`;
+                });
+
+                return interaction.editReply(`🔊 中継接続ラインを開通しました！\n\n${vcDetailMsg}`);
+            } catch (error) { 
+                console.error(error); 
+                return interaction.editReply('❌ 接続エラーが発生しました。'); 
+            }
+        }
+
 
             // 🎙️ 逆方向拡声オンコマンド (/vcon)
             if (commandName === 'vcon') {
