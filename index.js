@@ -356,30 +356,43 @@ process.on('uncaughtException', (err) => {
 
             // 接続・中継開始コマンド (/setvc)
             if (commandName === 'setvc') {
+                // 💡 【超高速化】イベントループの最優先タスクとして即座に応答を投げる
                 try {
                     await interaction.deferReply();
                 } catch (e) {
-                    console.error("⚠️ タイムアウト回避失敗:", e);
-                    return;
+                    // すでに承認されている(40060)場合はそのまま後続処理へ流すため、例外を無視して継続
+                    if (e.code !== 40060 && e.rawError?.code !== 40060) {
+                        console.error("⚠️ タイムアウト回避失敗:", e);
+                        return;
+                    }
                 }
 
-                setImmediate(async () => {
+                // 💡 100ミリ秒の物理的な隙間を作り、Discordとのパケットの往復（承認の確立）を完全に完了させる
+                setTimeout(async () => {
                     try {
                         const mainChannelRaw = options.getChannel('main_vc');
-                        const channelMain = guild.channels.cache.get(mainChannelRaw?.id);
+                        if (!mainChannelRaw) return interaction.editReply('❌ メインVCが選択されていません。').catch(() => {});
+                        
+                        const channelMain = guild.channels.cache.get(mainChannelRaw.id);
 
+                        // チャンネル取得も配列で一括処理せず、1つずつ安全に抽出
                         const subChannelIds = [
                             options.getChannel('sub_vc_1')?.id,
                             options.getChannel('sub_vc_2')?.id,
                             options.getChannel('sub_vc_3')?.id
                         ].filter(Boolean);
 
-                        const sourceChannels = subChannelIds.map(id => guild.channels.cache.get(id)).filter(Boolean);
+                        const sourceChannels = [];
+                        for (const id of subChannelIds) {
+                            const ch = guild.channels.cache.get(id);
+                            if (ch) sourceChannels.push(ch);
+                        }
 
                         if (!channelMain || sourceChannels.length === 0) {
                             return interaction.editReply('❌ 指定されたボイスチャンネルが正しく選択されていません。').catch(() => {});
                         }
 
+                        // ボイスチャンネルへの非同期一括接続
                         connectToVCs(currentGuildId, channelMain, sourceChannels);
                         
                         let configData = {};
@@ -398,12 +411,9 @@ process.on('uncaughtException', (err) => {
                         console.error("セットアップエラー:", error); 
                         await interaction.editReply('❌ 接続エラーが発生しました。').catch(() => {}); 
                     }
-                });
+                }, 100);
             }
-
-
-
-                        // 🎙️ vcon
+            // 🎙️ vcon
             if (commandName === 'vcon') {
                 const targetIdxNum = options.getInteger('number');
                 const mode = options.getString('mode') || 'all';
