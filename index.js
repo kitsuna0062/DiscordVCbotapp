@@ -300,7 +300,8 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
             adapterCreator: targetGuild.voiceAdapterCreator, 
             selfMute: false, 
             selfDeaf: false, 
-            group: `botSub_${index}`
+            group: `botSub_${index}`,
+            debug: true
         });
         
         const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
