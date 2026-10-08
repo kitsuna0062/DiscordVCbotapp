@@ -10,7 +10,7 @@ const { PassThrough } = require('stream');
 // 🌟 Render無料プラン対策（ダミーWebポート開放）
 // ==========================================
 const http = require('http');
-http.createServer((req, res) => { res.writeHead(200); res.end('OK'); }).listen(process.env.PORT || 3000, () => {
+http.createServer((req, res) => { res.writeHead(200); res.end('OK'); }).listen(process.env.PORT || 3000, '0.0.0.0', () => {
     console.log(`🌍 RenderのWebチェックに合格しました。ダミーWebポートを開放中...`);
 });
 
@@ -266,7 +266,7 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         getOrCreateGuildResources(guildId, index + 1);
     });
 
-    const connMain = joinVoiceChannel({ 
+        const connMain = joinVoiceChannel({ 
         channelId: mainChannel.id, 
         guildId, 
         adapterCreator: clientMain.guilds.cache.get(guildId).voiceAdapterCreator, 
@@ -274,6 +274,11 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
         selfDeaf: false, 
         group: 'botMain'
     });
+    // 💡 内部の音声WebSocketに対して、切断判定を緩くし、再接続の猶予を伸ばす手動パッチ
+    connMain.configureNetworkingOptions({
+        ip: '0.0.0.0'
+    });
+
     
     const { player: mainPlayer } = getOrCreateGuildResources(guildId, 0);
     connMain.subscribe(mainPlayer);
@@ -303,6 +308,9 @@ function connectToVCs(guildId, mainChannel, sourceChannels) {
             group: `botSub_${index}`,
             debug: true
         });
+        connSub.configureNetworkingOptions({
+        ip: '0.0.0.0'
+    });
         
         const { player: subPlayer } = getOrCreateGuildResources(guildId, index + 1);
         connSub.subscribe(subPlayer);
@@ -546,6 +554,10 @@ process.on('uncaughtException', (err) => {
         if (dns.setDefaultResultOrder) {
             dns.setDefaultResultOrder('ipv4first');
         }
+        clientMain.options.ws = {
+            ...clientMain.options.ws,
+            dns: (host, cb) => dns.resolve4(host, cb)
+        };
 
         console.log('🔗 司令塔Bot (Main) に接続中...');
         await clientMain.login(TOKENS.botMain);
@@ -555,6 +567,11 @@ process.on('uncaughtException', (err) => {
             await new Promise(r => setTimeout(r, 5000));
             console.log(`🔗 聴く係Bot (${i + 1}/${TOKENS.subs.length}) に接続中...`);
             const subClient = createClient();
+                        subClient.options.ws = {
+                ...subClient.options.ws,
+                dns: (host, cb) => dns.resolve4(host, cb)
+            };
+
             
             subClient.on('error', (err) => console.error(`[Sub_${i + 1} エラー]:`, err));
             subClient.once('ready', () => { 
