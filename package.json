@@ -19,5 +19,8 @@
   },
   "engines": {
     "node": "22.22.1"
+  },
+  "devDependencies": {
+    "pm2": "^7.0.4"
   }
 }
