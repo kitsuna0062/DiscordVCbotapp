@@ -18,23 +18,25 @@ To relay multiple voice channels, please invite the following secondary bots as 
 
 ## 💬 Commands
 
-Commands are text commands using `!` by default (not slash commands). Set `COMMAND_PREFIX` in Render to use another prefix. The bot requires the **Message Content Intent** to be enabled in the Discord Developer Portal.
+Commands are Discord slash commands. The bot registers them globally when the main bot starts; newly registered or changed commands can take up to an hour to appear in every server.
+This bot runs as a long-lived process and does not start an HTTP server.
 
-For Render, configure `DISCORD_TOKEN_MAIN` and at least one secondary token (`DISCORD_TOKEN_A` through `DISCORD_TOKEN_E`) as environment variables. Invite the matching bot accounts to the server and grant them permission to view, connect to, and speak in the selected voice channels.
+Configure `DISCORD_TOKEN_MAIN` and at least one secondary token (`DISCORD_TOKEN_A` through `DISCORD_TOKEN_E`) as environment variables on the host. Invite the matching bot accounts to the server and grant them permission to view, connect to, and speak in the selected voice channels.
 
-The `!setvc` command waits for every bot's voice connection to become ready. If it fails, check the Render logs for the per-bot VC state transitions and error. Set `VOICE_DEBUG=true` in Render for additional `@discordjs/voice` diagnostics; also verify that the host permits outbound UDP voice traffic.
+The `/setvc` command waits for every bot's voice connection to become ready. If it fails, check the host logs for the per-bot VC state transitions and error. Set `VOICE_DEBUG=true` for additional `@discordjs/voice` diagnostics; also verify that the host permits outbound UDP voice traffic.
 
 Use Node.js `22.22.1` or newer. The project uses `@discordjs/voice` 0.19.1, which supports Discord's required DAVE voice encryption and Voice Gateway v8.
 
 | Command | Description |
 | :--- | :--- |
-| `!setvc [main VC] [source VC 1] [source VC 2]...` | Join the specified main and source voice channels. Use channel names or IDs. |
-| `!connect` | Reconnect using the saved channel configuration. |
-| `!vcleave` | Disconnect all bots from voice channels. |
-| `!vcon [number] [only]` | Relay audio from the main VC to the numbered source VC. Add `only` to relay only the command author's audio. |
-| `!vcononly [number]` | Same as `!vcon [number] only`. |
-| `!vcoff [number]` | Stop relaying audio to the numbered source VC. |
-| `!vol [number] [volume]` | Set the source bot's relay volume from `0` to `300` percent. |
+| `/setvc main source1 [source2]...` | Join the selected main and source voice channels. Select channels from the command options. |
+| `/connect` | Reconnect using the saved channel configuration. |
+| `/vcleave` | Disconnect all bots from voice channels. |
+| `/vcon number [only]` | Relay audio from the main VC to the numbered source VC. Set `only` to relay only the command author's audio. |
+| `/vcononly number` | Relay only the command author's audio to the numbered source VC. |
+| `/vcoff number` | Stop relaying audio to the numbered source VC. |
+| `/vol number volume` | Set the source bot's relay volume from `0` to `300` percent. |
+| `/status` | Show the bots' online and voice-connection status in this server. |
 
 # DiscordVCbot
 
@@ -56,20 +58,22 @@ Discordのボイスチャンネル（VC）を中継・連携するためのBot�
 
 ## 💬 コマンド一覧 (Commands)
 
-コマンドは既定で `!` から始まるテキストコマンドです（スラッシュコマンドではありません）。Renderで `COMMAND_PREFIX` を設定すると別の接頭辞を使えます。Discord Developer Portalで **Message Content Intent** を有効にしてください。
+コマンドはDiscordのスラッシュコマンドです。メインBotの起動時にグローバル登録されます。新規登録・変更がすべてのサーバーに反映されるまで最大1時間ほどかかる場合があります。
+このBotは常時起動するプロセスとして動作し、HTTPサーバーは起動しません。
 
-Renderの環境変数に `DISCORD_TOKEN_MAIN` と、少なくとも1つのサブBot用トークン（`DISCORD_TOKEN_A`〜`DISCORD_TOKEN_E`）を設定してください。対応するBotアカウントをサーバーに招待し、使用するVCの閲覧・接続・発言権限を付与してください。
+サーバーの環境変数に `DISCORD_TOKEN_MAIN` と、少なくとも1つのサブBot用トークン（`DISCORD_TOKEN_A`〜`DISCORD_TOKEN_E`）を設定してください。対応するBotアカウントをサーバーに招待し、使用するVCの閲覧・接続・発言権限を付与してください。
 
-`!setvc` は全BotのVC接続がReadyになるまで待機します。接続に失敗した場合は、RenderログのBotごとのVC状態遷移とエラーを確認してください。Renderに `VOICE_DEBUG=true` を設定すると、`@discordjs/voice` の追加診断ログが有効になります。ホスト側で音声通信用の外向きUDP通信が許可されていることも確認してください。
+`/setvc` は全BotのVC接続がReadyになるまで待機します。接続に失敗した場合は、サーバーのログでBotごとのVC状態遷移とエラーを確認してください。`VOICE_DEBUG=true` を設定すると、`@discordjs/voice` の追加診断ログが有効になります。ホスト側で音声通信用の外向きUDP通信が許可されていることも確認してください。
 
 Node.js `22.22.1` 以降を使用してください。`@discordjs/voice` 0.19.1 に更新し、Discordで必須となったDAVE音声暗号化とVoice Gateway v8に対応しています。
 
 | コマンド | 説明 |
 | :--- | :--- |
-| `!setvc [メインVC] [元VC 1] [元VC 2]...` | 指定したメインVCと元VCにBotを接続します。VC名またはIDを指定します。 |
-| `!connect` | 保存済みのチャンネル設定で再接続します。 |
-| `!vcleave` | すべてのBotをVCから切断します。 |
-| `!vcon [番号] [only]` | メインVCから番号に対応する元VCへ音声を中継します。`only` を付けると実行者の音声だけを中継します。 |
-| `!vcononly [番号]` | `!vcon [番号] only` と同じです。 |
-| `!vcoff [番号]` | 指定した元VCへの音声中継を停止します。 |
-| `!vol [番号] [音量]` | 元VCごとの中継音量を `0`〜`300`% で設定します。 |
+| `/setvc main source1 [source2]...` | 選択したメインVCと元VCにBotを接続します。VCはコマンドの選択肢から指定します。 |
+| `/connect` | 保存済みのチャンネル設定で再接続します。 |
+| `/vcleave` | すべてのBotをVCから切断します。 |
+| `/vcon number [only]` | メインVCから番号に対応する元VCへ音声を中継します。`only` を有効にすると実行者の音声だけを中継します。 |
+| `/vcononly number` | 実行者の音声だけを番号に対応する元VCへ中継します。 |
+| `/vcoff number` | 指定した元VCへの音声中継を停止します。 |
+| `/vol number volume` | 元VCごとの中継音量を `0`〜`300`% で設定します。 |
+| `/status` | このサーバー内の各Botのオンライン状態とVC接続状態を表示します。 |
