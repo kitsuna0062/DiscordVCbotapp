@@ -12,14 +12,15 @@ const { PcmMixer } = require('./pcm-mixer');
 // ==========================================
 const TOKENS = {
     botMain: process.env.DISCORD_TOKEN_MAIN,
-    subs: [
-        process.env.DISCORD_TOKEN_A,
-        process.env.DISCORD_TOKEN_B,
-        process.env.DISCORD_TOKEN_C,
-        process.env.DISCORD_TOKEN_D,
-        process.env.DISCORD_TOKEN_E
-    ].filter(t => t && t !== '') 
+    subs: Object.keys(process.env)
+        // 1. 環境変数のうち、名前が「DISCORD_TOKEN_SUB_」で始まるものだけを抜き出す
+        .filter(key => key.startsWith('DISCORD_TOKEN_SUB_'))
+        // 2. その環境変数の「値（トークン文字列）」の配列に変換する
+        .map(key => process.env[key])
+        // 3. 空文字や未定義のものを除外する
+        .filter(t => t && t !== '')
 };
+
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
