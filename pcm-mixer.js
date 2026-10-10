@@ -88,7 +88,6 @@ class PcmMixer {
             for (let i = 0; i < SAMPLE_COUNT; i++) {
                 mixed[i] += Math.round(frame.readInt16LE(i * 2) * source.volume);
             }
-            if (source.queuedBytes === 0) source.started = false;
         }
 
         const outputFrame = Buffer.allocUnsafe(FRAME_BYTES);

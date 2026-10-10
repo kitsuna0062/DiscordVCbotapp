@@ -75,6 +75,14 @@ test('prebuffers jitter before starting a source', async () => {
         await new Promise(resolve => setImmediate(resolve));
         mixer.mixFrame();
         assert.equal(mixer.output.read(FRAME_BYTES).readInt16LE(0), 1000);
+
+        mixer.mixFrame();
+        assert.equal(mixer.output.read(FRAME_BYTES).readInt16LE(0), 1000);
+
+        input.write(pcmFrame(1000));
+        await new Promise(resolve => setImmediate(resolve));
+        mixer.mixFrame();
+        assert.equal(mixer.output.read(FRAME_BYTES).readInt16LE(0), 1000);
     } finally {
         input.destroy();
         mixer.destroy();
