@@ -118,7 +118,12 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
 
     receiver.speaking.on('start', (userId) => {
         const compositeKey = `${sourceIndex}_${userId}`;
-        if (activeStreams.has(compositeKey)) return; 
+        const existingStream = activeStreams.get(compositeKey);
+        if (existingStream) {
+            clearTimeout(existingStream.cleanupTimer);
+            delete existingStream.cleanupTimer;
+            return;
+        }
         
         console.log(`🎵 [ギルド: ${guildId} / Bot: ${sourceName}] 音声検知・中継開始: ID ${userId}`);
         
@@ -155,7 +160,7 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
 
         const { opusStream, decoder, passThrough, mixer, mixerKey } = streamData;
 
-        setTimeout(() => {
+        streamData.cleanupTimer = setTimeout(() => {
             try { 
                 mixer?.removeSource(mixerKey);
                 decoder.unpipe(passThrough);
@@ -164,7 +169,9 @@ function setupVoiceReceiverForMain(connection, sourceName, guildId, sourceIndex,
                 decoder.destroy(); 
                 opusStream.destroy(); 
             } catch(e){}
-            activeStreams.delete(compositeKey);
+            if (activeStreams.get(compositeKey) === streamData) {
+                activeStreams.delete(compositeKey);
+            }
             console.log(`🧹 [ギルド: ${guildId} / Bot: ${sourceName}] ストリーム＆プレイヤーキャッシュ完全解放。`);
         }, 150);
     });
@@ -199,7 +206,12 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
         if (isOnly && userId !== speakerUserId) return; 
         
         const streamKey = `reverse_${targetSubIndex}_${userId}`;
-        if (reverseMap.has(streamKey)) return;
+        const existingStream = reverseMap.get(streamKey);
+        if (existingStream) {
+            clearTimeout(existingStream.cleanupTimer);
+            delete existingStream.cleanupTimer;
+            return;
+        }
 
         console.log(`📢 [ギルド: ${guildId}] メインVCの声を検知 ➔ サブBot ${targetSubIndex} へ流し込み中... (ユーザー: ${userId})`);
 
@@ -231,13 +243,15 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
         if (!streamData) return;
 
         const { opusStream, decoder, passThrough, mixer, mixerKey } = streamData;
-        setTimeout(() => {
+        streamData.cleanupTimer = setTimeout(() => {
             try {
                 mixer?.removeSource(mixerKey);
                 decoder.unpipe(passThrough); opusStream.unpipe(decoder);
                 passThrough.destroy(); decoder.destroy(); opusStream.destroy();
             } catch(e){}
-            reverseMap.delete(streamKey);
+            if (reverseMap.get(streamKey) === streamData) {
+                reverseMap.delete(streamKey);
+            }
             console.log(`🧹 [ギルド: ${guildId}] 逆方向個別ストリーム解放。`);
         }, 150);
     };
@@ -245,7 +259,7 @@ function setupReverseVoiceReceiver(connMain, guildId, targetSubIndex, speakerUse
     receiver.speaking.on('start', startHandler);
     receiver.speaking.on('end', endHandler);
 
-    reverseMap.set(targetSubIndex, { startHandler, endHandler, isOnly, speakerUserId });
+    reverseMap.set(targetSubIndex, { receiver, startHandler, endHandler, isOnly, speakerUserId });
 }
 
 /**
@@ -256,10 +270,9 @@ function stopReverseVoiceReceiver(guildId, targetSubIndex) {
     if (!reverseMap) return;
 
     const config = reverseMap.get(targetSubIndex);
-    const connMain = getVoiceConnection(guildId, 'botMain');
-    if (config && connMain) {
-        connMain.receiver.speaking.off('start', config.startHandler);
-        connMain.receiver.speaking.off('end', config.endHandler);
+    if (config) {
+        config.receiver.speaking.off('start', config.startHandler);
+        config.receiver.speaking.off('end', config.endHandler);
     }
     reverseMap.delete(targetSubIndex);
     const reverseOutput = guildReverseMixers.get(guildId)?.get(targetSubIndex);
@@ -270,6 +283,7 @@ function stopReverseVoiceReceiver(guildId, targetSubIndex) {
     for (const [key, streamData] of reverseMap.entries()) {
         if (key.startsWith(`reverse_${targetSubIndex}_`)) {
             try {
+                clearTimeout(streamData.cleanupTimer);
                 streamData.mixer?.removeSource(streamData.mixerKey);
                 streamData.decoder.unpipe(streamData.passThrough);
                 streamData.opusStream.unpipe(streamData.decoder);
@@ -295,6 +309,7 @@ async function connectToVCs(guildId, mainChannel, sourceChannels) {
     const existingActiveStreams = guildActiveStreams.get(guildId);
     if (existingActiveStreams) {
         for (const streamData of existingActiveStreams.values()) {
+            clearTimeout(streamData.cleanupTimer);
             streamData.mixer?.removeSource(streamData.mixerKey);
             streamData.passThrough.destroy();
             streamData.decoder.destroy();
@@ -532,6 +547,7 @@ clientMain.on('interactionCreate', async interaction => {
             if (activeStreams) {
                 for (const streamData of activeStreams.values()) {
                     try {
+                        clearTimeout(streamData.cleanupTimer);
                         streamData.mixer?.removeSource(streamData.mixerKey);
                         streamData.decoder.unpipe(streamData.passThrough);
                         streamData.opusStream.unpipe(streamData.decoder);
