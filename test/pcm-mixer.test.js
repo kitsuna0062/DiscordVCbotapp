@@ -23,8 +23,10 @@ test('mixes simultaneous input sources and clamps overflow', async () => {
     mixer.addSource('second', second);
 
     try {
-        first.write(pcmFrame(20000));
-        second.write(pcmFrame(20000));
+        for (let i = 0; i < 3; i++) {
+            first.write(pcmFrame(20000));
+            second.write(pcmFrame(20000));
+        }
         await new Promise(resolve => setImmediate(resolve));
         mixer.mixFrame();
 
@@ -44,13 +46,35 @@ test('applies per-source volume while mixing', async () => {
     mixer.addSource('quiet', input, 0.5);
 
     try {
-        input.write(pcmFrame(1000));
+        for (let i = 0; i < 3; i++) input.write(pcmFrame(1000));
         await new Promise(resolve => setImmediate(resolve));
         mixer.mixFrame();
 
         const output = mixer.output.read(FRAME_BYTES);
         assert.ok(output);
         assert.equal(output.readInt16LE(0), 500);
+    } finally {
+        input.destroy();
+        mixer.destroy();
+    }
+});
+
+test('prebuffers jitter before starting a source', async () => {
+    const mixer = new PcmMixer();
+    const input = new PassThrough();
+    mixer.addSource('buffered', input);
+
+    try {
+        input.write(pcmFrame(1000));
+        await new Promise(resolve => setImmediate(resolve));
+        mixer.mixFrame();
+        assert.equal(mixer.output.read(FRAME_BYTES).readInt16LE(0), 0);
+
+        input.write(pcmFrame(1000));
+        input.write(pcmFrame(1000));
+        await new Promise(resolve => setImmediate(resolve));
+        mixer.mixFrame();
+        assert.equal(mixer.output.read(FRAME_BYTES).readInt16LE(0), 1000);
     } finally {
         input.destroy();
         mixer.destroy();
