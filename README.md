@@ -21,7 +21,7 @@ To relay multiple voice channels, please invite the following secondary bots as 
 Commands are Discord slash commands. The bot registers them globally when the main bot starts; newly registered or changed commands can take up to an hour to appear in every server.
 This bot runs as a long-lived process and does not start an HTTP server.
 
-Configure `DISCORD_TOKEN_MAIN` and at least one secondary token (`DISCORD_TOKEN_A` through `DISCORD_TOKEN_E`) as environment variables on the host. Invite the matching bot accounts to the server and grant them permission to view, connect to, and speak in the selected voice channels.
+Set `DISCORD_TOKEN_MAIN` and at least one secondary token (`DISCORD_TOKEN_SUB_A` through `DISCORD_TOKEN_SUB_E`) in the `.env` file next to `index.js`, or provide them as environment variables on the host. The bot loads the `.env` file automatically at startup. Invite the matching bot accounts to the server and grant them permission to view, connect to, and speak in the selected voice channels.
 
 The `/setvc` command waits for every bot's voice connection to become ready. If it fails, check the host logs for the per-bot VC state transitions and error. Set `VOICE_DEBUG=true` for additional `@discordjs/voice` diagnostics; also verify that the host permits outbound UDP voice traffic.
 
@@ -61,7 +61,7 @@ Discordのボイスチャンネル（VC）を中継・連携するためのBot�
 コマンドはDiscordのスラッシュコマンドです。メインBotの起動時にグローバル登録されます。新規登録・変更がすべてのサーバーに反映されるまで最大1時間ほどかかる場合があります。
 このBotは常時起動するプロセスとして動作し、HTTPサーバーは起動しません。
 
-サーバーの環境変数に `DISCORD_TOKEN_MAIN` と、少なくとも1つのサブBot用トークン（`DISCORD_TOKEN_A`〜`DISCORD_TOKEN_E`）を設定してください。対応するBotアカウントをサーバーに招待し、使用するVCの閲覧・接続・発言権限を付与してください。
+`index.js` と同じ場所にある `.env` ファイルに `DISCORD_TOKEN_MAIN` と、少なくとも1つのサブBot用トークン（`DISCORD_TOKEN_SUB_A`〜`DISCORD_TOKEN_SUB_E`）を設定してください。起動時に `.env` は自動で読み込まれます。ホスト側の環境変数として直接設定する方法も利用できます。対応するBotアカウントをサーバーに招待し、使用するVCの閲覧・接続・発言権限を付与してください。
 
 `/setvc` は全BotのVC接続がReadyになるまで待機します。接続に失敗した場合は、サーバーのログでBotごとのVC状態遷移とエラーを確認してください。`VOICE_DEBUG=true` を設定すると、`@discordjs/voice` の追加診断ログが有効になります。ホスト側で音声通信用の外向きUDP通信が許可されていることも確認してください。
 

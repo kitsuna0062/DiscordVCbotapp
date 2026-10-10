@@ -7,6 +7,11 @@ const path = require('path');
 const { PassThrough } = require('stream'); 
 const { PcmMixer } = require('./pcm-mixer');
 
+const ENV_FILE = path.join(__dirname, '.env');
+if (fs.existsSync(ENV_FILE)) {
+    process.loadEnvFile(ENV_FILE);
+}
+
 // ==========================================
 // 🌟 環境変数トークンの読み込み
 // ==========================================
